@@ -140,3 +140,20 @@ def test_dashboard_is_read_only():
         source = path.read_text().upper()
         for keyword in ("INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER "):
             assert keyword not in source, f"{path.name} contains {keyword.strip()}"
+
+
+# --- importability --------------------------------------------------------
+
+def test_app_module_imports_without_a_database():
+    """Importing the dashboard must not execute it.
+
+    Streamlit scripts run top to bottom, so a module-level body hits the
+    database on import. CI's import check caught this: `src.dashboard.app`
+    failed with "no such table: workflow_runs" because no blotter exists in a
+    fresh checkout. The body now lives in main(), called only when Streamlit
+    runs the file as a script.
+    """
+    import importlib
+
+    module = importlib.import_module("src.dashboard.app")
+    assert hasattr(module, "main") and callable(module.main)
