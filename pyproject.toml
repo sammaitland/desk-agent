@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "desk-agent"
+version = "0.1.0"
+description = "Read-only analytics agent over a systematic pairs-trading blotter"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=1.0",
+    "sqlalchemy>=2.0",
+    "matplotlib>=3.8",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+slack = ["slack-bolt>=1.18"]
+dashboard = ["streamlit>=1.30", "pandas>=2.0"]
+# mcp 2.x renamed FastMCP to MCPServer and moved fields to snake_case; v1
+# code will not import, hence the floor rather than a compatible range.
+mcp = ["mcp>=2.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "slack-bolt>=1.18", "mcp>=2.0",
+       "streamlit>=1.30", "pandas>=2.0"]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Keeps `from src...` imports resolving when pytest is run from the project root.
+pythonpath = ["."]

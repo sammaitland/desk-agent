@@ -1,0 +1,293 @@
+-- Desk Agent — blotter schema (V9.4C-aligned)
+--
+-- Built from the V9.4C Trade Event Schema. Field names, enums and thresholds
+-- mirror the live system so that real paper-account output populates these
+-- tables unchanged.
+--
+-- Portable SQL: runs on SQLite (dev) and PostgreSQL (target).
+--
+-- OPEN QUESTIONS flagged during design (resolve before this is load-bearing):
+--   1. Longlist/Shortlist ordering contradicts ARCHITECTURE.md. This schema
+--      follows the event-schema reference: primary filters -> Shortlist,
+--      secondary signals -> Longlist.
+--   2. Index enum here includes VOX; README names five ETFs. Six assumed.
+
+DROP TABLE IF EXISTS order_allocations;
+DROP TABLE IF EXISTS fills;
+DROP TABLE IF EXISTS stop_orders;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS position_updates;
+DROP TABLE IF EXISTS positions;
+DROP TABLE IF EXISTS pair_evaluations;
+DROP TABLE IF EXISTS risk_checks;
+DROP TABLE IF EXISTS portfolio_snapshots;
+DROP TABLE IF EXISTS workflow_stages;
+DROP TABLE IF EXISTS workflow_runs;
+DROP TABLE IF EXISTS system_events;
+DROP TABLE IF EXISTS instruments;
+
+
+CREATE TABLE instruments (
+    ticker          TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    idx             TEXT NOT NULL,
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    delisted_date   TEXT,
+    delisting_type  TEXT,
+    acquirer        TEXT
+);
+
+
+CREATE TABLE workflow_runs (
+    run_id          TEXT PRIMARY KEY,
+    run_date        TEXT NOT NULL,
+    started_at      TEXT NOT NULL,
+    completed_at    TEXT,
+    outcome         TEXT NOT NULL
+);
+
+
+CREATE TABLE workflow_stages (
+    run_id          TEXT NOT NULL,
+    stage_number    INTEGER NOT NULL,
+    stage_name      TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    duration_ms     INTEGER,
+    key_outputs     TEXT,
+    PRIMARY KEY (run_id, stage_number),
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+);
+
+
+CREATE TABLE portfolio_snapshots (
+    run_id                  TEXT PRIMARY KEY,
+    snapshot_date           TEXT NOT NULL,
+    position_count          INTEGER NOT NULL,
+    account_value           REAL NOT NULL,
+    total_gross_exposure    REAL NOT NULL,
+    leverage                REAL NOT NULL,
+    dollar_weighted_beta    REAL,
+    staleness_minutes       REAL,
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+);
+
+
+CREATE TABLE pair_evaluations (
+    eval_id                     TEXT PRIMARY KEY,
+    run_id                      TEXT NOT NULL,
+    evaluated_at                TEXT NOT NULL,
+    pair                        TEXT NOT NULL,
+    idx                         TEXT NOT NULL,
+    co1                         TEXT NOT NULL,
+    co2                         TEXT NOT NULL,
+    tail                        TEXT,
+    tstat                       REAL,
+    weighted_spread_bps         REAL,
+    earnings_days_out           INTEGER,
+    co1_trending                INTEGER,
+    co2_trending                INTEGER,
+    same_direction_result       TEXT,
+    nominal_direction_result    TEXT,
+    primary_result              TEXT NOT NULL,
+    primary_fail_reason         TEXT,
+    volume_ratio                REAL,
+    rolling_intraday_vol        REAL,
+    iv_percentile               REAL,
+    volume_dominance            REAL,
+    true_last_hour_volatility   REAL,
+    weighted_score              REAL,
+    composite_score             REAL,
+    sum_deviation_15d           REAL,
+    sum_dev_percentile          REAL,
+    sum_dev_bucket              TEXT,
+    position_multiplier         REAL,
+    is_tradeable_bucket         INTEGER,
+    shocked_factors             TEXT,
+    factor_action               TEXT,
+    spread_quality_score        REAL,
+    sum_dev_extremity_score     REAL,
+    composite_priority_score    REAL,
+    evaluation_result           TEXT,
+    rejection_reason            TEXT,
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+);
+
+
+CREATE TABLE positions (
+    tag                     TEXT PRIMARY KEY,
+    pair                    TEXT NOT NULL,
+    co1                     TEXT NOT NULL,
+    co2                     TEXT NOT NULL,
+    idx                     TEXT NOT NULL,
+    tail                    TEXT NOT NULL,
+    version                 TEXT NOT NULL,
+    quantity1               INTEGER NOT NULL,
+    quantity2               INTEGER NOT NULL,
+    w1                      REAL NOT NULL,
+    w2                      REAL NOT NULL,
+    trade_value_co1         REAL NOT NULL,
+    trade_value_co2         REAL NOT NULL,
+    total_notional          REAL NOT NULL,
+    position_multiplier     REAL NOT NULL,
+    co1_at_initiation       REAL NOT NULL,
+    co2_at_initiation       REAL NOT NULL,
+    index_at_initiation     REAL NOT NULL,
+    trade_initiation_date   TEXT NOT NULL,
+    entry_spread_bps        REAL,
+    sum_dev_bucket          TEXT NOT NULL,
+    sum_deviation           REAL,
+    sum_dev_percentile      REAL,
+    weighted_score          REAL,
+    composite_score         REAL,
+    beta                    REAL,
+    stop_price              REAL,
+    stop_order_id           TEXT,
+    status                  TEXT NOT NULL,
+    exit_reason             TEXT,
+    termination_date        TEXT,
+    holding_days            INTEGER,
+    co1_at_exit             REAL,
+    co2_at_exit             REAL,
+    index_at_exit           REAL,
+    co1_return_pct          REAL,
+    co2_return_pct          REAL,
+    index_return_pct        REAL,
+    co1_alpha_pct           REAL,
+    co2_alpha_pct           REAL,
+    final_alpha_return_pct  REAL,
+    FOREIGN KEY (co1) REFERENCES instruments(ticker),
+    FOREIGN KEY (co2) REFERENCES instruments(ticker)
+);
+
+
+CREATE TABLE position_updates (
+    tag                     TEXT NOT NULL,
+    update_date             TEXT NOT NULL,
+    run_id                  TEXT,
+    live_co1_price          REAL NOT NULL,
+    live_co2_price          REAL NOT NULL,
+    live_index_price        REAL NOT NULL,
+    co1_return_pct          REAL NOT NULL,
+    co2_return_pct          REAL NOT NULL,
+    index_return_pct        REAL NOT NULL,
+    co1_alpha_pct           REAL,
+    co2_alpha_pct           REAL,
+    live_alpha_return_pct   REAL NOT NULL,
+    days_held               INTEGER NOT NULL,
+    PRIMARY KEY (tag, update_date),
+    FOREIGN KEY (tag) REFERENCES positions(tag)
+);
+
+
+CREATE TABLE orders (
+    order_id            TEXT PRIMARY KEY,
+    run_id              TEXT,
+    ticker              TEXT NOT NULL,
+    side                TEXT NOT NULL,
+    order_type          TEXT NOT NULL,
+    total_shares        INTEGER NOT NULL,
+    limit_price         REAL,
+    bid                 REAL,
+    ask                 REAL,
+    spread_bps          REAL,
+    arrival_mid         REAL,
+    batch_number        INTEGER,
+    placed_at           TEXT NOT NULL,
+    resolved_at         TEXT,
+    elapsed_seconds     REAL,
+    status              TEXT NOT NULL,
+    filled_shares       INTEGER NOT NULL DEFAULT 0,
+    fill_status         TEXT,
+    fallback_reason     TEXT,
+    fell_back_to_mkt    INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (ticker) REFERENCES instruments(ticker),
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+);
+
+
+CREATE TABLE order_allocations (
+    allocation_id       TEXT PRIMARY KEY,
+    order_id            TEXT NOT NULL,
+    tag                 TEXT NOT NULL,
+    pair                TEXT NOT NULL,
+    requested_shares    INTEGER NOT NULL,
+    allocated_shares    INTEGER NOT NULL,
+    allocation_status   TEXT NOT NULL,
+    FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+
+CREATE TABLE fills (
+    fill_id     TEXT PRIMARY KEY,
+    order_id    TEXT NOT NULL,
+    quantity    INTEGER NOT NULL,
+    price       REAL NOT NULL,
+    filled_at   TEXT NOT NULL,
+    commission  REAL NOT NULL DEFAULT 0.0,
+    FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+
+CREATE TABLE stop_orders (
+    stop_order_tag  TEXT PRIMARY KEY,
+    tag             TEXT NOT NULL,
+    ticker          TEXT NOT NULL,
+    quantity        INTEGER NOT NULL,
+    entry_price     REAL NOT NULL,
+    stop_price      REAL NOT NULL,
+    alpha_threshold REAL NOT NULL DEFAULT 0.40,
+    order_id        TEXT,
+    placed_at       TEXT NOT NULL,
+    last_updated_at TEXT,
+    status          TEXT NOT NULL,
+    triggered_at    TEXT,
+    FOREIGN KEY (tag) REFERENCES positions(tag)
+);
+
+
+CREATE TABLE risk_checks (
+    check_id        TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL,
+    checked_at      TEXT NOT NULL,
+    check_name      TEXT NOT NULL,
+    subject         TEXT,
+    current_value   REAL,
+    threshold       REAL,
+    result          TEXT NOT NULL,
+    action          TEXT,
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
+);
+
+
+CREATE TABLE system_events (
+    event_id        TEXT PRIMARY KEY,
+    occurred_at     TEXT NOT NULL,
+    run_id          TEXT,
+    event_type      TEXT NOT NULL,
+    severity        TEXT NOT NULL,
+    ticker          TEXT,
+    tag             TEXT,
+    order_id        TEXT,
+    detail          TEXT NOT NULL,
+    remedy_action   TEXT,
+    resolved        INTEGER NOT NULL DEFAULT 0,
+    resolution      TEXT
+);
+
+
+CREATE INDEX idx_orders_placed      ON orders(placed_at);
+CREATE INDEX idx_orders_ticker      ON orders(ticker);
+CREATE INDEX idx_orders_run         ON orders(run_id);
+CREATE INDEX idx_fills_order        ON fills(order_id);
+CREATE INDEX idx_alloc_order        ON order_allocations(order_id);
+CREATE INDEX idx_alloc_tag          ON order_allocations(tag);
+CREATE INDEX idx_eval_run           ON pair_evaluations(run_id);
+CREATE INDEX idx_eval_pair          ON pair_evaluations(pair);
+CREATE INDEX idx_eval_result        ON pair_evaluations(evaluation_result);
+CREATE INDEX idx_positions_status   ON positions(status);
+CREATE INDEX idx_positions_idx      ON positions(idx);
+CREATE INDEX idx_updates_date       ON position_updates(update_date);
+CREATE INDEX idx_events_occurred    ON system_events(occurred_at);
+CREATE INDEX idx_events_type        ON system_events(event_type);
+CREATE INDEX idx_risk_run           ON risk_checks(run_id);
+CREATE INDEX idx_stages_run         ON workflow_stages(run_id);

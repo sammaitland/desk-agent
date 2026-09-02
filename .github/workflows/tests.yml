@@ -1,0 +1,84 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  sqlite:
+    name: pytest (SQLite, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  postgres:
+    # The README claims Postgres is a config change rather than a rewrite.
+    # This job is what makes that true: the whole suite runs against a real
+    # Postgres, so any SQLite-specific SQL fails here rather than in
+    # production. An untested portability claim is a guess.
+    name: pytest (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: blotter
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/blotter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]" psycopg2-binary
+      - name: Generate a blotter against Postgres
+        run: python -m src.generate_blotter --days 60 --seed 42
+      - run: python -m pytest -q
+
+  lint:
+    name: import and packaging check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: Every module imports cleanly
+        # Catches the failure mode that has bitten this project repeatedly:
+        # a file saved to the wrong directory imports fine from the project
+        # root and breaks everywhere else.
+        run: |
+          python -c "
+          import importlib, pkgutil, src
+          failed = []
+          for m in pkgutil.walk_packages(src.__path__, 'src.'):
+              try:
+                  importlib.import_module(m.name)
+              except Exception as exc:
+                  failed.append(f'{m.name}: {exc}')
+          if failed:
+              raise SystemExit('Import failures:\n  ' + '\n  '.join(failed))
+          print('all modules import')
+          "

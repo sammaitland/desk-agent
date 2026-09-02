@@ -1,0 +1,46 @@
+# Runs the agent against PostgreSQL rather than SQLite, which is what the
+# DB_URL abstraction exists for. Bringing this up is the local equivalent of
+# the Postgres job in CI: if the SQL is not portable, it fails here.
+#
+#   docker compose run --rm agent -m src.generate_blotter --days 120 --seed 42
+#   docker compose run --rm agent cli.py "what went wrong last week?"
+#   docker compose up slack
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: blotter
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  agent:
+    build: .
+    env_file: .env
+    environment:
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/blotter
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./charts:/app/charts
+      - ./traces:/app/traces
+
+  slack:
+    build: .
+    env_file: .env
+    environment:
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/blotter
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["-m", "src.slack.bot"]
+    restart: unless-stopped
+
+volumes:
+  pgdata:

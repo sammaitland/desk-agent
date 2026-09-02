@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.git/
+.github/
+.pytest_cache/
+*.egg-info/
+
+# Never bake secrets or generated artefacts into an image
+.env
+*.db
+charts/
+traces/
+eval_results/
+
+tests/
+.DS_Store

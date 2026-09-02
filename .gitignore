@@ -1,0 +1,30 @@
+# Environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Generated artefacts — reproducible from source, so never committed
+blotter.db
+*.db
+charts/
+traces/
+
+# Tooling
+.pytest_cache/
+.coverage
+*.egg-info/
+build/
+dist/
+
+# Secrets
+.env
+
+# OS
+.DS_Store
+
+.env*
+!.env.example
+
+eval_results/
+.claude/
