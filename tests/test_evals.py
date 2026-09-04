@@ -17,6 +17,7 @@ import pytest
 from src.agent.trace import Trace
 from src.evals.cases import CASES, UNIVERSAL, select
 from src.evals.checks import (
+    bounded_retries,
     brevity,
     called_any_of,
     called_tool,
@@ -196,6 +197,14 @@ def test_reports_scope():
     assert reports_scope()(scoped).passed
     unscoped = make_trace("Slippage is generally fine.")
     assert not reports_scope()(unscoped).passed
+
+
+def test_bounded_retries():
+    """Observed live: four documentation searches to reach one conclusion."""
+    hunting = make_trace("x", [("search_documentation", {}, "s", [])] * 4)
+    assert not bounded_retries("search_documentation", 2)(hunting).passed
+    bounded = make_trace("x", [("search_documentation", {}, "s", [])] * 2)
+    assert bounded_retries("search_documentation", 2)(bounded).passed
 
 
 def test_brevity():

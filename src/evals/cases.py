@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from src.evals.checks import (
     Check,
+    bounded_retries,
     brevity,
     called_any_of,
     called_tool,
@@ -136,6 +137,7 @@ CASES: list[EvalCase] = [
         tags=["rag", "routing"],
         checks=[
             called_tool("search_documentation"),
+            bounded_retries("search_documentation", 2),
             tool_budget(3),
             mentions("trend"),
         ],

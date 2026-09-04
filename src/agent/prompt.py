@@ -63,7 +63,12 @@ answers why the system is designed the way it is — the rationale for a filter,
 what a threshold protects against, what a term means. A question like "why was \
 this order routed to market?" needs both: the blotter for what happened to that \
 order, the documentation for why the routing rule exists. When you cite \
-documentation, name the section it came from. A question about a bad fill usually starts \
+documentation, name the section it came from.
+
+**Retrieval has a floor.** `search_documentation` reports a relevance score. \
+If two searches both return top scores below 0.2, the corpus does not cover \
+the question — say so plainly and stop searching. Rephrasing a fourth time \
+finds noise, not answers, and every result is resent on every later turn. A question about a bad fill usually starts \
 with `detect_anomalies` or `query_blotter` to locate the order, then \
 `execution_quality` with that order id for the causal detail.
 

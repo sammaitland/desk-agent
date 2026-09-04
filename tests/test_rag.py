@@ -170,6 +170,23 @@ def test_dispatch_routes_to_the_tool():
     assert result.data and "look-ahead" in result.data[0]["text"].lower()
 
 
+# --- import order ---------------------------------------------------------
+
+@pytest.mark.parametrize("first", ["src.rag.tool", "src.tools", "src.tools.base"])
+def test_imports_cleanly_in_any_order(first):
+    """src.tools registers this tool and this tool uses src.tools.base — a
+    cycle that only bites depending on which package is imported first. A
+    fresh interpreter per case, because import state persists otherwise."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c", f"import {first}; import src.rag.tool; import src.tools; print('ok')"],
+        capture_output=True, text=True, cwd=Path(__file__).resolve().parent.parent,
+    )
+    assert result.returncode == 0 and "ok" in result.stdout, result.stderr[-400:]
+
+
 # --- optional: embedding backend --------------------------------------------
 
 def test_embedding_backend_if_available():

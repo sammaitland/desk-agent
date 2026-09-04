@@ -18,9 +18,12 @@ expensive step, and the corpus does not change within a session.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from src.rag.retriever import Retriever, build_retriever
-from src.tools.base import ToolResult, empty
+
+if TYPE_CHECKING:  # annotations only; the runtime import is deferred below
+    from src.tools.base import ToolResult
 
 # Below this score a hit is noise. Lexical and embedding scores are on
 # different scales; each backend's floor is set inside its search method, and
@@ -38,7 +41,7 @@ def reset_retriever() -> None:
     _retriever.cache_clear()
 
 
-def search_documentation(query: str, k: int = 4) -> ToolResult:
+def search_documentation(query: str, k: int = 4) -> "ToolResult":
     """Search the trading system's design documentation.
 
     Answers questions about WHY the system is built the way it is — the
@@ -51,6 +54,12 @@ def search_documentation(query: str, k: int = 4) -> ToolResult:
     Use this when the question is about design, rationale or definitions;
     use the blotter tools when it is about data. Many questions need both.
     """
+    # Deferred import. src.tools.__init__ imports this module to register the
+    # tool, and this module needs src.tools.base for the envelope — a cycle.
+    # Importing at call time breaks it: by then both packages are fully loaded,
+    # whichever was imported first.
+    from src.tools.base import ToolResult, empty
+
     query = (query or "").strip()
     if not query:
         return empty("No query supplied.")
@@ -66,6 +75,10 @@ def search_documentation(query: str, k: int = 4) -> ToolResult:
         )
 
     top = hits[0]
+    # Say so when the best match is weak. The model reads the summary first,
+    # and "low confidence" there is what stops it treating a 0.08 hit as an
+    # answer or re-querying indefinitely in search of a better one.
+    confidence = "low confidence — " if top.score < 0.2 else ""
     return ToolResult(
         data=[h.as_dict() for h in hits],
         provenance={
@@ -76,6 +89,6 @@ def search_documentation(query: str, k: int = 4) -> ToolResult:
             "top_score": round(float(top.score), 4),
             "sources": sorted({h.chunk.source for h in hits}),
         },
-        summary=(f"{len(hits)} passages for '{query}'; best match "
+        summary=(f"{confidence}{len(hits)} passages for '{query}'; best match "
                  f"{top.chunk.citation} (score {top.score:.2f})."),
     )

@@ -212,6 +212,18 @@ def numeric_fidelity(max_unsupported: int = 0) -> Check:
     return check
 
 
+def bounded_retries(tool: str, maximum: int = 2) -> Check:
+    """The same tool called more than `maximum` times is a hunt, not an
+    investigation. Observed live: four documentation searches at scores
+    between 0.06 and 0.15, all resent every turn, to reach a conclusion the
+    second search already supported."""
+    def check(trace: Trace) -> CheckResult:
+        count = trace.tool_sequence.count(tool)
+        return CheckResult(f"<= {maximum} calls to {tool}", count <= maximum,
+                           f"called {count} times")
+    return check
+
+
 def brevity(max_words: int) -> Check:
     def check(trace: Trace) -> CheckResult:
         words = len(trace.answer.split())
