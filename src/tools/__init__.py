@@ -16,6 +16,7 @@ from src.tools.analytics import alpha_attribution, detect_anomalies, execution_q
 from src.tools.base import ToolResult
 from src.tools.blotter import explain_position, explain_rejection, query_blotter
 from src.tools.charts import make_chart
+from src.rag.tool import search_documentation
 
 # Tools taking a database connection as their first argument. make_chart does
 # not touch the blotter, so the loop passes it through differently.
@@ -29,6 +30,7 @@ DB_TOOLS: dict[str, Callable[..., ToolResult]] = {
 
 PURE_TOOLS: dict[str, Callable[..., ToolResult]] = {
     "make_chart": make_chart,
+    "search_documentation": search_documentation,
 }
 
 TOOLS: dict[str, Callable[..., ToolResult]] = {**DB_TOOLS, **PURE_TOOLS}
@@ -179,6 +181,28 @@ TOOL_SCHEMAS = [
                 "limit": {"type": "integer", "description": "Max events, default 50."},
             },
             "required": [],
+        },
+    },
+    {
+        "name": "search_documentation",
+        "description": (
+            "Search the trading system's design documentation. Answers WHY the system is "
+            "built the way it is: the rationale behind a filter or threshold, what a gate "
+            "protects against, how calibration and implementation relate, or what a term "
+            "means in this system's vocabulary. Returns the most relevant passages, each "
+            "with a citation (file and section) and a relevance score. This is the "
+            "counterpart to the blotter tools, which answer what HAPPENED — use this for "
+            "design and definitions, the blotter tools for data, and both when a question "
+            "asks what happened AND why the system responded that way."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "The question or topic to search for, in natural language."},
+                "k": {"type": "integer", "description": "Number of passages to return, default 4."},
+            },
+            "required": ["query"],
         },
     },
     {

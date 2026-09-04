@@ -53,6 +53,7 @@ async def test_every_analytical_tool_is_exposed(server):
     is meaningless to a remote MCP host."""
     names = {t.name for t in await server.list_tools()}
     assert names == set(TOOLS) - {"make_chart"}
+    assert "search_documentation" in names
 
 
 @pytest.mark.asyncio

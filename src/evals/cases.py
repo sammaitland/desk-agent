@@ -22,6 +22,7 @@ from src.evals.checks import (
     challenges_premise,
     chained,
     forbids,
+    mentions,
     no_absence_overclaim,
     no_deferred_investigation,
     no_tool_errors,
@@ -123,6 +124,32 @@ CASES: list[EvalCase] = [
         checks=[
             chained(2),
             called_tool("explain_position"),
+            tool_budget(5),
+        ],
+    ),
+    EvalCase(
+        name="design_rationale",
+        question="Why does the system reject pairs where a leg is trending?",
+        note=("A pure design question with no blotter answer. Must route to "
+              "search_documentation rather than querying data that cannot "
+              "contain a rationale, and must cite where the answer came from."),
+        tags=["rag", "routing"],
+        checks=[
+            called_tool("search_documentation"),
+            tool_budget(3),
+            mentions("trend"),
+        ],
+    ),
+    EvalCase(
+        name="what_and_why",
+        question="Why was the C order on the 24th routed to market, and what is that rule for?",
+        note=("Needs both retrieval paths: the blotter for what happened to the "
+              "order, documentation for why the routing rule exists. The test of "
+              "whether the agent understands it has two kinds of tool."),
+        tags=["rag", "chaining"],
+        checks=[
+            called_tool("execution_quality"),
+            called_tool("search_documentation"),
             tool_budget(5),
         ],
     ),

@@ -464,68 +464,6 @@ rather than event handlers, and why everything touching the database sits
 behind `@st.cache_data` in `src/dashboard/data.py`. Splitting data access out
 of the UI also makes the numbers testable while the layout is not.
 
-## Phase 8 — Retrieval over documentation
-
-```bash
-# lexical retrieval works out of the box
-python cli.py "why does the system reject trending pairs?" --trace
-
-# dense retrieval, optional
-pip install -e ".[embeddings]"
-RAG_BACKEND=embedding python cli.py "..."
-```
-
-An eighth tool, `search_documentation`, retrieves passages from the trading
-system's design documents in `docs/` — architecture, event schema, and this
-project's own README and manual.
-
-### Two kinds of question, two kinds of retrieval
-
-The blotter tools answer *what happened*: they run SQL over structured rows.
-`search_documentation` answers *why the system is built this way*: it runs
-retrieval over prose. A question like "why was this order routed to market?"
-needs both — the blotter for what happened to that order, the documentation
-for why the routing rule exists — and the agent chains them.
-
-This is retrieval-augmented generation alongside the tool layer rather than
-instead of it. The two are suited to different data shapes, and the choice
-between them is a property of the data, not a preference. Both return the same
-envelope with provenance, so the agent cannot tell them apart and the same
-sourcing discipline applies: every retrieved passage carries a citation to file
-and section.
-
-### The retriever is an interface with two backends
-
-`LexicalRetriever` is TF-IDF over the chunks: deterministic, no model
-download, and good when queries share vocabulary with the documents.
-`EmbeddingRetriever` uses sentence-transformer embeddings and finds passages
-that mean the same thing in different words.
-
-Which is right is an empirical question about the corpus and the queries, so
-it is a configuration rather than a commitment. The failure mode that
-distinguishes them showed up immediately: the query "why are limit orders
-rejected above 24bps?" ranks weakly under lexical retrieval because the
-documentation writes it as `MAX_LIMIT_ORDER_SPREAD_BPS = 24` — same meaning,
-no shared tokens. That is precisely the gap embeddings close.
-
-### Chunking follows structure, not token counts
-
-Documents are split at heading boundaries, and each chunk carries its heading
-path — `ARCHITECTURE.md › Execution › Order routing` — as both citation and
-prefix. Technical documentation is already organised into units of meaning;
-cutting across them at an arbitrary token boundary splits the very thing
-retrieval is trying to find. Over-long sections split on paragraph breaks;
-sections too thin to be worth indexing are dropped.
-
-### Retrieval quality is a corpus property
-
-The first retrieval miss was not the retriever's fault: the trading
-architecture document never mentions spreads, so the best available match was
-weak and correctly reported as such. Adding the event schema — which does cover
-order routing — fixed it. The lesson generalises: a retrieval system is only as
-good as what it has been given to retrieve from, and a low top score is
-information, not noise.
-
 ## Next
 
 Real paper-account data, and a production version at operational-data.

@@ -55,7 +55,15 @@ mid — paid up on a buy, sold down on a sell.
 ## How to work
 
 Investigate before you answer. Most questions need more than one tool: find \
-what happened, then get the detail. A question about a bad fill usually starts \
+what happened, then get the detail.
+
+**Two kinds of question, two kinds of tool.** The blotter tools answer what \
+happened — positions, orders, fills, rejections, events. `search_documentation` \
+answers why the system is designed the way it is — the rationale for a filter, \
+what a threshold protects against, what a term means. A question like "why was \
+this order routed to market?" needs both: the blotter for what happened to that \
+order, the documentation for why the routing rule exists. When you cite \
+documentation, name the section it came from. A question about a bad fill usually starts \
 with `detect_anomalies` or `query_blotter` to locate the order, then \
 `execution_quality` with that order id for the causal detail.
 

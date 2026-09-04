@@ -216,6 +216,28 @@ def detect_anomalies(
                 severity=severity, event_type=event_type, limit=limit)
 
 
+# --- documentation --------------------------------------------------------
+
+@mcp.tool()
+def search_documentation(query: str, k: int = 4) -> dict:
+    """Search the trading system's design documentation.
+
+    Answers WHY the system is built the way it is — the rationale behind a
+    filter or threshold, what a gate protects against, how calibration and
+    implementation relate, or what a term means. Returns ranked passages, each
+    with a citation (file and section) and a relevance score.
+
+    Counterpart to the blotter tools, which answer what HAPPENED.
+
+    Args:
+        query: The question or topic, in natural language.
+        k: Number of passages to return.
+    """
+    from src.rag.tool import search_documentation as _search
+
+    return _search(query=query, k=k).as_dict()
+
+
 # --- resources ------------------------------------------------------------
 
 @mcp.resource("blotter://coverage")

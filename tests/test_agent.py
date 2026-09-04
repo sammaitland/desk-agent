@@ -46,7 +46,7 @@ def test_first_request_carries_question_and_tools(conn):
     run_agent("What happened?", conn, client=client)
     request = client.requests[0]
     assert request["messages"] == [{"role": "user", "content": "What happened?"}]
-    assert len(request["tools"]) == 7
+    assert len(request["tools"]) == 8
     assert request["system"].startswith("You are an analytics assistant")
 
 
