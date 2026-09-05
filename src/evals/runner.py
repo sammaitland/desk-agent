@@ -43,6 +43,7 @@ class CaseResult:
     output_tokens: int = 0
     duration_ms: int = 0
     error: str | None = None
+    held_out: bool = False
 
     @property
     def failures(self) -> list[dict]:
@@ -85,9 +86,18 @@ def run_case(case: EvalCase, conn: Connection, client=None, model: str = MODEL) 
             name=case.name, question=case.question, passed=False,
             tool_sequence=trace.tool_sequence, answer=trace.answer,
             turns=trace.turns, duration_ms=trace.duration_ms, error=trace.error,
+            held_out=case.held_out,
         )
 
     results: list[CheckResult] = [check(trace) for check in case.checks + UNIVERSAL]
+
+    # Scores go to Langfuse if the trace went there. Eval results attached to
+    # the trace they judged is what makes the dashboard a regression view.
+    if trace.langfuse_trace_id:
+        from src.observability.langfuse_export import score_trace
+
+        score_trace(trace.langfuse_trace_id, [asdict(r) for r in results])
+
     return CaseResult(
         name=case.name,
         question=case.question,
@@ -100,6 +110,7 @@ def run_case(case: EvalCase, conn: Connection, client=None, model: str = MODEL) 
         input_tokens=trace.input_tokens,
         output_tokens=trace.output_tokens,
         duration_ms=trace.duration_ms,
+        held_out=case.held_out,
     )
 
 
@@ -123,7 +134,8 @@ def run_suite(
         if verbose:
             elapsed = time.perf_counter() - started
             mark = "PASS" if result.passed else "FAIL"
-            print(f"{mark}  ({elapsed:.1f}s, {len(result.tool_sequence)} tools)")
+            tag = "  [held-out]" if result.held_out else ""
+            print(f"{mark}  ({elapsed:.1f}s, {len(result.tool_sequence)} tools){tag}")
             for failure in result.failures:
                 print(f"      - {failure['name']}: {failure['detail']}")
             if result.error:
@@ -147,6 +159,10 @@ def report(suite: SuiteResult) -> str:
     ]
     tokens_in, tokens_out = suite.total_tokens
     lines.append(f"tokens: {tokens_in:,} in / {tokens_out:,} out")
+    held = [c for c in suite.cases if c.held_out]
+    if held:
+        passed = sum(1 for c in held if c.passed)
+        lines.append(f"held-out: {passed}/{len(held)} — the out-of-sample measure")
 
     tally: dict[str, list[int]] = {}
     for case in suite.cases:

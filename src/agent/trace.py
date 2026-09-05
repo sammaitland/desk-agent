@@ -52,9 +52,16 @@ class Trace:
     turns: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0      # served from cache — billed at ~10%
+    cache_write_tokens: int = 0     # written to cache this call — billed at 125%
+    # Per-turn usage, so an exporter can emit one generation per API call
+    # rather than one aggregate. Each entry: {turn, input, output, cache_read,
+    # cache_write}.
+    turn_usage: list[dict] = field(default_factory=list)
     duration_ms: int = 0
     stop_reason: str | None = None
     error: str | None = None
+    langfuse_trace_id: str | None = None   # set when exported; used for scoring
 
     _clock: float = field(default_factory=time.perf_counter, repr=False)
 
@@ -79,8 +86,18 @@ class Trace:
     def record_usage(self, usage) -> None:
         if usage is None:
             return
-        self.input_tokens += getattr(usage, "input_tokens", 0) or 0
-        self.output_tokens += getattr(usage, "output_tokens", 0) or 0
+        entry = {
+            "turn": self.turns,
+            "input": getattr(usage, "input_tokens", 0) or 0,
+            "output": getattr(usage, "output_tokens", 0) or 0,
+            "cache_read": getattr(usage, "cache_read_input_tokens", 0) or 0,
+            "cache_write": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        }
+        self.turn_usage.append(entry)
+        self.input_tokens += entry["input"]
+        self.output_tokens += entry["output"]
+        self.cache_read_tokens += entry["cache_read"]
+        self.cache_write_tokens += entry["cache_write"]
 
     def finish(self, answer: str, stop_reason: str | None = None) -> Trace:
         self.answer = answer
@@ -117,8 +134,9 @@ class Trace:
             f"question   {self.question}",
             f"run_id     {self.run_id}",
             f"turns      {self.turns}   tools {len(self.tool_calls)}   "
-            f"tokens {self.input_tokens}in/{self.output_tokens}out   "
-            f"{self.duration_ms}ms",
+            f"tokens {self.input_tokens}in/{self.output_tokens}out"
+            + (f" (+{self.cache_read_tokens} cached)" if self.cache_read_tokens else "")
+            + f"   {self.duration_ms}ms",
             "",
         ]
         for i, call in enumerate(self.tool_calls, start=1):

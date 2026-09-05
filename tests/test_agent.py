@@ -47,7 +47,7 @@ def test_first_request_carries_question_and_tools(conn):
     request = client.requests[0]
     assert request["messages"] == [{"role": "user", "content": "What happened?"}]
     assert len(request["tools"]) == 8
-    assert request["system"].startswith("You are an analytics assistant")
+    assert request["system"][0]["text"].startswith("You are an analytics assistant")
 
 
 def test_tool_results_go_in_a_user_message(conn):
@@ -112,6 +112,56 @@ def test_assistant_content_is_echoed_verbatim(conn):
     assert blocks[0] == {"type": "text", "text": "Checking."}
     assert blocks[1]["name"] == "query_blotter"
     assert blocks[1]["input"] == {"entity": "runs", "limit": 1}
+
+
+# --- prompt caching -------------------------------------------------------
+
+def test_system_prompt_is_a_cacheable_block(conn):
+    """The system prompt must go as a content block with cache_control, not a
+    bare string — a string cannot carry the cache marker."""
+    client = ScriptedClient([final_turn("Answer.")])
+    run_agent("q", conn, client=client)
+    system = client.requests[0]["system"]
+    assert isinstance(system, list) and len(system) == 1
+    assert system[0]["type"] == "text"
+    assert system[0]["cache_control"] == {"type": "ephemeral"}
+    assert system[0]["text"].startswith("You are an analytics assistant")
+
+
+def test_tools_carry_one_cache_breakpoint(conn):
+    """One marker on the last tool caches the whole array. More than one is
+    wasteful; none means the ~1,500-token schema block is billed every turn."""
+    client = ScriptedClient([final_turn("Answer.")])
+    run_agent("q", conn, client=client)
+    tools = client.requests[0]["tools"]
+    marked = [t for t in tools if "cache_control" in t]
+    assert len(marked) == 1 and marked[0] is tools[-1]
+
+
+def test_cached_prefix_is_identical_across_turns(conn):
+    """A cache hit requires a byte-identical prefix. Any drift between turns —
+    a timestamp in the prompt, reordered tools — silently defeats it."""
+    client = ScriptedClient([
+        tool_turn("query_blotter", {"entity": "runs", "limit": 1}),
+        final_turn("Done."),
+    ])
+    run_agent("q", conn, client=client)
+    first, second = client.requests[0], client.requests[1]
+    assert first["system"] == second["system"]
+    assert first["tools"] == second["tools"]
+
+
+def test_trace_records_cache_usage(conn):
+    from src.agent.scripted import Response, TextBlock, Usage
+
+    client = ScriptedClient([Response(
+        content=[TextBlock(text="Answer.")], stop_reason="end_turn",
+        usage=Usage(input_tokens=300, output_tokens=50,
+                    cache_read_input_tokens=2900, cache_creation_input_tokens=0),
+    )])
+    trace = run_agent("q", conn, client=client)
+    assert trace.cache_read_tokens == 2900
+    assert "cached" in trace.render()
 
 
 # --- chaining -------------------------------------------------------------
@@ -224,4 +274,4 @@ def test_prompt_appends_runtime_context():
 def test_prompt_tells_the_model_its_date_range(conn):
     client = ScriptedClient([final_turn("Answer.")])
     run_agent("When does the data start?", conn, client=client)
-    assert "The blotter covers" in client.requests[0]["system"]
+    assert "The blotter covers" in client.requests[0]["system"][0]["text"]

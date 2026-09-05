@@ -1,6 +1,6 @@
 # Desk Agent
 
-[![tests](https://github.com/YOUR-USERNAME/desk-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/YOUR-USERNAME/desk-agent/actions/workflows/tests.yml)
+[![tests](https://github.com/sammaitland/desk-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/sammaitland/desk-agent/actions/workflows/tests.yml)
 
 Read-only analytics agent over a systematic pairs-trading blotter, queried in
 natural language. This phase builds the data layer.

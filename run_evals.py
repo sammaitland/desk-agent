@@ -5,6 +5,7 @@
     python run_evals.py --tags chaining        # a subset
     python run_evals.py --case false_premise   # one case
     python run_evals.py --show-answers         # print each answer in full
+    python run_evals.py --include-held-out     # the honest measure; run sparingly
 
 Costs real API calls — roughly one per case plus a turn per tool used. Run on
 demand or nightly, not on every commit; `pytest` covers the loop mechanics for
@@ -30,13 +31,19 @@ def main() -> int:
     parser.add_argument("--tags", nargs="*", help="run only cases with these tags")
     parser.add_argument("--model", default=MODEL)
     parser.add_argument("--show-answers", action="store_true")
+    parser.add_argument("--include-held-out", action="store_true",
+                        help="also run held-out cases (never tune the prompt against these)")
     parser.add_argument("--no-save", action="store_true")
     parser.add_argument("--db-url", default=None)
     args = parser.parse_args()
 
     env.require("anthropic")
 
-    cases = select(names=args.case, tags=args.tags)
+    cases = select(names=args.case, tags=args.tags, include_held_out=args.include_held_out)
+    if args.include_held_out:
+        held = [c.name for c in cases if c.held_out]
+        print(f"\nHELD-OUT cases included: {', '.join(held)}")
+        print("Do not edit the prompt in response to a held-out failure. Promote the case first.")
     if not cases:
         print(f"No cases matched. Available: {', '.join(c.name for c in CASES)}", file=sys.stderr)
         return 2

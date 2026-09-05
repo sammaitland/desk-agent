@@ -63,6 +63,32 @@ def _blotter_context(conn: Connection) -> str:
             f"to {last}, the most recent trading day held.")
 
 
+def _cached_system(system: str) -> list[dict[str, Any]]:
+    """Wrap the system prompt as a cacheable content block.
+
+    The system prompt and tool schemas are ~3,000 tokens resent on every turn
+    of every query. Marking them with cache_control lets the API serve them
+    from cache at a fraction of the cost; only the conversation itself is
+    charged at full rate. The cache key is the exact prefix, so the runtime
+    context (blotter date range) must stay stable within a session for the
+    cache to hit — which it does.
+    """
+    return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+
+
+def _cached_tools(schemas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mark the last tool definition as a cache breakpoint.
+
+    cache_control on the final tool caches the whole tools array as one
+    prefix. Tools are processed before the system prompt in the cache
+    ordering, so this and _cached_system together cover the entire fixed
+    portion of every request.
+    """
+    tools = [dict(t) for t in schemas]
+    tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
+    return tools
+
+
 def _tool_result_block(tool_use_id: str, result) -> dict[str, Any]:
     """Serialise a ToolResult into the block shape the API expects.
 
@@ -92,7 +118,8 @@ def run_agent(
     """
     client = client or build_client()
     trace = Trace(question=question)
-    system = build_system_prompt(_blotter_context(conn))
+    system = _cached_system(build_system_prompt(_blotter_context(conn)))
+    tools = _cached_tools(TOOL_SCHEMAS)
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
 
     try:
@@ -102,7 +129,7 @@ def run_agent(
                 model=model,
                 max_tokens=MAX_TOKENS,
                 system=system,
-                tools=TOOL_SCHEMAS,
+                tools=tools,
                 messages=messages,
             )
             trace.record_usage(getattr(response, "usage", None))
@@ -162,4 +189,9 @@ def _finish(trace: Trace, answer: str, stop_reason: str | None, save: bool) -> T
     trace.finish(answer, stop_reason)
     if save:
         trace.save()
+    # Second destination, opt-in via environment. Never affects the answer.
+    from src.observability.langfuse_export import configured, export_trace
+
+    if configured():
+        trace.langfuse_trace_id = export_trace(trace)
     return trace

@@ -21,11 +21,14 @@ dashboard = ["streamlit>=1.30", "pandas>=2.0"]
 # Dense retrieval. Optional: the lexical backend needs nothing beyond
 # scikit-learn, and the retriever falls back to it if this is absent.
 embeddings = ["sentence-transformers>=2.2"]
+# Trace export. Optional: the local JSON trace is always written; this adds a
+# second destination when LANGFUSE_* keys are set.
+observability = ["langfuse>=4.0"]
 # mcp 2.x renamed FastMCP to MCPServer and moved fields to snake_case; v1
 # code will not import, hence the floor rather than a compatible range.
 mcp = ["mcp>=2.0"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "slack-bolt>=1.18", "mcp>=2.0",
-       "streamlit>=1.30", "pandas>=2.0"]
+       "streamlit>=1.30", "pandas>=2.0", "langfuse>=4.0"]
 
 [tool.setuptools.packages.find]
 include = ["src*"]

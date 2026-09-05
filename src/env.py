@@ -21,6 +21,8 @@ ENV_PATH = PROJECT_ROOT / ".env"
 REQUIRED = {
     "anthropic": ["ANTHROPIC_API_KEY"],
     "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
+    # Langfuse is optional: absent keys mean no export, silently.
+    "langfuse": ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"],
 }
 
 

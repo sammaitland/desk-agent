@@ -4,7 +4,7 @@ A read-only analytics agent over a systematic pairs-trading blotter. Ask a
 question in natural language, get an investigated answer with charts and an
 audit trail.
 
-**State:** Phases 0–7 complete. 144 tests passing. Slack and CLI verified
+**State:** Phases 0–8 complete. 170 tests passing. Slack and CLI verified
 against the live API. CI and Docker written but not yet exercised on GitHub.
 
 ---
@@ -123,6 +123,23 @@ figure here and a figure in an agent answer are the same tested function.
 `data.py` separately from the UI in `app.py`, which is what makes the numbers
 testable while the layout is not.
 
+### Phase 8 — Retrieval over documentation (`src/rag/`)
+
+An eighth tool, `search_documentation`, retrieves passages from the trading
+system's design documents in `docs/`. Two backends behind a `Retriever`
+protocol: `LexicalRetriever` (TF-IDF, deterministic, no model download) and
+`EmbeddingRetriever` (sentence-transformers, optional). `RAG_BACKEND` env var
+selects; defaults to lexical, falls back gracefully if embeddings unavailable.
+
+Chunking follows heading boundaries rather than token counts, and each chunk
+carries its heading path as both citation and retrieval prefix. The tool
+returns the standard `ToolResult` envelope with provenance, so the agent's
+sourcing discipline applies unchanged.
+
+Three new eval cases: `design_rationale`, `definition_lookup`, and
+`outside_the_corpus` (held-out). `what_and_why` tests chaining a blotter
+lookup with a documentation search.
+
 ### Credentials (`src/env.py`, `.env`)
 
 `.env` at the project root, gitignored, loaded automatically by every entry
@@ -137,13 +154,14 @@ server relying on `export` would fail to authenticate with no obvious cause.
 | File | Tests | Covers |
 |---|---:|---|
 | `test_tools.py` | 39 | envelope contract, arithmetic, empty/malformed input, schema consistency, SQL portability |
+| `test_evals.py` | 28 | the eval checks themselves |
 | `test_blotter.py` | 24 | domain invariants — disabled buckets never trade, alpha stays market-neutral, allocations reconcile |
-| `test_evals.py` | 24 | the eval checks themselves |
+| `test_rag.py` | 21 | chunking, retrieval ranking, tool envelope, integration |
 | `test_slack.py` | 18 | mrkdwn conversion, truncation, chart extraction |
 | `test_agent.py` | 17 | API protocol, chaining, error recovery, turn cap, tracing |
+| `test_dashboard.py` | 13 | cached queries, agreement with the tool layer, SQL portability |
 | `test_mcp_server.py` | 10 | registration, schema generation, envelope preservation |
-| `test_dashboard.py` | 12 | cached queries, agreement with the tool layer, SQL portability |
-| **Total** | **144** | |
+| **Total** | **170** | |
 
 ---
 
@@ -248,7 +266,7 @@ server relying on `export` would fail to authenticate with no obvious cause.
 cd ~/Desktop/Python/desk_agent     # venv auto-activates via the zshrc cd hook
 which python                        # confirm .../desk_agent/.venv/bin/python
 
-make test                           # 132 tests
+make test                           # 170 tests
 make blotter                        # regenerate synthetic data
 make ask Q="what went wrong last week?"
 make evals                          # costs API calls

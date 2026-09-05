@@ -228,6 +228,18 @@ every commit. `run_evals.py` tests the **model** against the live API: costs
 calls, runs on demand. Merging them would give either expensive unit tests or
 evals that never see a model.
 
+### A held-out set, because the prompt has been tuned
+
+Once a prompt is edited in response to an eval failure, that eval stops being
+an unbiased measure — it is in-sample, in exactly the sense a backtest is. So
+the suite has two tiers: fifteen **development** cases the prompt has been
+tuned against, and seven **held-out** cases that are never used for tuning,
+skipped by default, and run with `--include-held-out` only after a batch of
+changes. The rule is not to read a held-out failure and then edit the prompt to
+fix it: promote the case to development, write a new held-out one, and accept
+the suite has one fewer honest measure until then. Same discipline as
+walk-forward validation, for the same reason.
+
 ### Cases come from observed behaviour
 
 Every case was written after watching real runs. Three protect behaviour worth
@@ -525,6 +537,47 @@ weak and correctly reported as such. Adding the event schema — which does cove
 order routing — fixed it. The lesson generalises: a retrieval system is only as
 good as what it has been given to retrieve from, and a low top score is
 information, not noise.
+
+## Observability — Langfuse
+
+```bash
+pip install -e ".[observability]"
+# add LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to .env
+python cli.py "what went wrong last week?"      # exported automatically
+python run_evals.py                              # check results attached as scores
+```
+
+Every run is exported to Langfuse alongside the local trace JSON: one span for
+the run, one generation per API turn with cache token usage, one span per tool
+call nested under the turn that requested it. Eval check results attach to the
+trace they judged as boolean scores, so the dashboard filters by failing check
+name and every regression of that kind is one click away.
+
+### Hand-rolled first, Langfuse second — deliberately
+
+`src/agent/trace.py` came first and stays. It is the source of truth for evals,
+it needs no external service, and knowing exactly what it captures is what
+makes Langfuse's abstractions legible rather than magical. The exporter is a
+mapping from one to the other, not a replacement — the same argument as
+building the agent loop by hand before reading a framework.
+
+### Three rules the exporter keeps
+
+**No-op when unconfigured.** A machine without Langfuse keys behaves
+identically to one with them, minus the export. No warning, no error, no
+network.
+
+**Never fatal.** If Langfuse is down, the agent answers as normal and logs a
+warning. An observability failure must not become an availability failure —
+`test_agent_answer_unaffected_by_export` points the exporter at a port nothing
+listens on and confirms the answer arrives.
+
+**Injectable.** The client is passed in, so the mapping is tested against a
+recording fake without a Langfuse instance. Same pattern as the scripted API
+client in the loop.
+
+Built against langfuse 4.x, the OpenTelemetry-based rewrite from March 2026.
+Langfuse was acquired by ClickHouse in January 2026 and remains MIT-licensed.
 
 ## Next
 

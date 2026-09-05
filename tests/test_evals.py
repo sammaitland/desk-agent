@@ -233,3 +233,33 @@ def test_selection_by_tag_and_name():
     assert select(tags=["chaining"]) and all("chaining" in c.tags for c in select(tags=["chaining"]))
     assert [c.name for c in select(names=["false_premise"])] == ["false_premise"]
     assert select(names=["nonexistent"]) == []
+
+
+def test_held_out_cases_are_excluded_by_default():
+    """The out-of-sample set must not leak into the default run, or it stops
+    being out of sample the first time someone tunes against it."""
+    from src.evals.cases import DEVELOPMENT, HELD_OUT
+
+    assert HELD_OUT, "the suite needs held-out cases to have an honest measure"
+    default = select()
+    assert not any(c.held_out for c in default)
+    assert len(default) == len(DEVELOPMENT)
+    assert len(select(include_held_out=True)) == len(DEVELOPMENT) + len(HELD_OUT)
+
+
+def test_held_out_share_is_meaningful():
+    from src.evals.cases import CASES, HELD_OUT
+
+    assert 0.2 <= len(HELD_OUT) / len(CASES) <= 0.5
+
+
+def test_every_category_has_a_held_out_case():
+    """Each behavioural category needs an out-of-sample probe, or a category
+    could be fully in-sample without anyone noticing."""
+    from src.evals.cases import CASES
+
+    tags_dev = {t for c in CASES if not c.held_out for t in c.tags}
+    tags_held = {t for c in CASES if c.held_out for t in c.tags}
+    for tag in ("chaining", "honesty", "domain", "rag", "safety", "scope"):
+        assert tag in tags_dev, f"no development case tagged {tag}"
+        assert tag in tags_held, f"no held-out case tagged {tag}"
