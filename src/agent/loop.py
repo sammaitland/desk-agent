@@ -113,6 +113,8 @@ def run_agent(
     save_trace: bool = False,
     compress: bool = False,
     routing: dict | None = None,
+    corpus: str | None = None,
+    trace_dir=None,
 ) -> Trace:
     """Answer one question, returning the full trace.
 
@@ -123,6 +125,9 @@ def run_agent(
     trace = Trace(question=question)
     trace.model = model
     trace.routing = routing
+    trace.config = {"model": model, "max_turns": max_turns, "caching": True,
+                    "compress": compress, "routed": routing is not None}
+    trace.corpus = corpus
     system = _cached_system(build_system_prompt(_blotter_context(conn)))
     tools = _cached_tools(TOOL_SCHEMAS)
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
@@ -147,7 +152,7 @@ def run_agent(
                     block.text for block in response.content
                     if getattr(block, "type", None) == "text"
                 )
-                return _finish(trace, text.strip(), response.stop_reason, save_trace)
+                return _finish(trace, text.strip(), response.stop_reason, save_trace, trace_dir)
 
             # Echo the assistant turn back verbatim, then answer every tool_use
             # block it contained in a single following user message.
@@ -172,12 +177,12 @@ def run_agent(
             f"Stopped after {max_turns} turns without reaching an answer. "
             f"Tools called: {', '.join(trace.tool_sequence) or 'none'}.",
             "max_turns",
-            save_trace,
+            save_trace, trace_dir,
         )
 
     except Exception as exc:  # transport, auth, rate limit
         trace.error = f"{type(exc).__name__}: {exc}"
-        return _finish(trace, f"The request failed: {trace.error}", "error", save_trace)
+        return _finish(trace, f"The request failed: {trace.error}", "error", save_trace, trace_dir)
 
 
 def run_agent_routed(
@@ -219,13 +224,16 @@ def _serialise(content) -> list[dict[str, Any]]:
     return blocks
 
 
-def _finish(trace: Trace, answer: str, stop_reason: str | None, save: bool) -> Trace:
+def _finish(trace: Trace, answer: str, stop_reason: str | None, save: bool,
+            trace_dir=None) -> Trace:
     trace.finish(answer, stop_reason)
     if save:
-        trace.save()
+        trace.save(trace_dir)
     # Second destination, opt-in via environment. Never affects the answer.
     from src.observability.langfuse_export import configured, export_trace
 
     if configured():
-        trace.langfuse_trace_id = export_trace(trace)
+        # Attribute generations to the model that actually ran — a routed Haiku
+        # call logged as Sonnet would misprice every cost figure downstream.
+        trace.langfuse_trace_id = export_trace(trace, model=trace.model)
     return trace

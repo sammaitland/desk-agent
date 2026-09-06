@@ -154,6 +154,23 @@ def test_negative_figures_reconcile():
     assert numeric_fidelity()(trace).passed
 
 
+def test_provenance_figures_are_sourced():
+    """Event counts live in provenance, not data. First live run: '11 partial
+    fills' was flagged unsupported because the check never looked there."""
+    trace = Trace(question="q")
+    result = type("R", (), {"provenance": {"rows": 50, "event_type_counts": {"partial_fill": 11}},
+                            "summary": "50 events", "data": []})()
+    trace.record_tool("detect_anomalies", {}, result, 1, 1)
+    trace.finish("There were 11 partial fills across 50 events.", "end_turn")
+    assert numeric_fidelity()(trace).passed
+
+
+def test_retrieval_floor_is_a_prompt_constant():
+    trace = make_trace("The best match scored below the 0.2 floor.",
+                       [("search_documentation", {}, "low confidence", [])])
+    assert numeric_fidelity()(trace).passed
+
+
 def test_passes_when_no_tools_were_called():
     """Nothing to verify against is not a failure — other checks catch that."""
     assert numeric_fidelity()(make_trace("No data available.")).passed

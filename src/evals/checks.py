@@ -31,6 +31,7 @@ PROMPT_CONSTANTS = {
     cfg.MAX_INDEX_GROSS_EXPOSURE_PCT, float(cfg.MAX_NEW_POSITIONS_PER_TICKER),
     cfg.MIN_POSITION_SIZE, cfg.MAX_POSITION_SIZE,
     0.0, 0.7, 1.0, 1.1, 1.3, 1.4,  # bucket multipliers
+    0.2,                            # retrieval confidence floor, stated in the prompt
 }
 
 # Dates, times, tags and identifiers produce digits that are not claims.
@@ -127,6 +128,12 @@ def _tool_numbers(trace: Trace) -> set[float]:
         raw = getattr(call, "raw_result", None)
         if raw is not None:
             _numbers_in_payload(raw, numbers)
+        # Provenance carries event counts, windows and scores — all legitimate
+        # figures for the model to quote. Missing this produced false
+        # negatives on every incident review.
+        prov = getattr(call, "provenance", None)
+        if prov:
+            _numbers_in_payload(prov, numbers)
     return numbers
 
 

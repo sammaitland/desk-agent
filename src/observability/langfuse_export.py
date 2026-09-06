@@ -60,7 +60,7 @@ def build_client():
 
 
 def export_trace(trace: Trace, client: LangfuseLike | None = None,
-                 model: str = MODEL_DEFAULT) -> str | None:
+                 model: str | None = None) -> str | None:
     """Send a finished Trace to Langfuse. Returns the Langfuse trace id, or None.
 
     Mapping:
@@ -81,8 +81,11 @@ def export_trace(trace: Trace, client: LangfuseLike | None = None,
             log.warning("Langfuse unavailable, trace not exported: %s", exc)
             return None
 
+    # The model that ran is on the trace. Only fall back to the default when a
+    # trace predates model recording.
+    resolved = model or trace.model or MODEL_DEFAULT
     try:
-        return _export(trace, client, model)
+        return _export(trace, client, resolved)
     except Exception as exc:
         log.warning("Langfuse export failed for run %s: %s", trace.run_id, exc)
         return None

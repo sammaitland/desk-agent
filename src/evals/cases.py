@@ -223,11 +223,13 @@ CASES: list[EvalCase] = [
     ),
     EvalCase(
         name="definition_lookup",
-        question="What does 'Tail' mean in this system?",
-        note="A vocabulary question. Documentation, not data.",
+        question="What is the nominal direction check?",
+        note=("A vocabulary question answerable only from the documentation. The "
+              "first version asked about 'Tail', which the system prompt defines — "
+              "the agent correctly answered without a tool, and the check was wrong "
+              "to demand one. Ask for something the prompt does not hold."),
         tags=["rag", "routing"],
-        checks=[called_tool("search_documentation"), mentions("long", "short"),
-                tool_budget(2), brevity(150)],
+        checks=[called_tool("search_documentation"), tool_budget(2), brevity(150)],
     ),
     EvalCase(
         name="outside_the_corpus",

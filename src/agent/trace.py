@@ -21,6 +21,13 @@ from pathlib import Path
 from typing import Any
 
 TRACE_DIR = Path(__file__).resolve().parent.parent.parent / "traces"
+BASELINE_DIR = TRACE_DIR / "baseline"
+
+# Bumped when the trace gains fields the predictor depends on. Traces from
+# before per-turn usage, model identity and cache accounting existed are
+# schema 1; they cannot train a router because they do not record what the
+# router needs to reproduce.
+TRACE_SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -38,6 +45,7 @@ class ToolCall:
     # the model states against everything the tool actually returned. Excluded
     # from the rendered trace, which would otherwise be unreadable.
     raw_result: Any = None
+    provenance: dict | None = None   # full provenance; event counts and windows live here
 
 
 @dataclass
@@ -45,6 +53,9 @@ class Trace:
     """The full record of one question, answered."""
 
     question: str
+    schema_version: int = TRACE_SCHEMA_VERSION
+    corpus: str | None = None            # "baseline" when generated for the predictor
+    config: dict | None = None           # the inference configuration that produced this run
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
     tool_calls: list[ToolCall] = field(default_factory=list)
@@ -84,6 +95,7 @@ class Trace:
             # run is. The distinction matters when reviewing a trace.
             error=summary.startswith(("Unknown tool", "Invalid arguments")),
             raw_result=getattr(result, "data", None),
+            provenance=dict(provenance),
         ))
 
     def record_usage(self, usage) -> None:
@@ -111,6 +123,15 @@ class Trace:
     # -- reading -----------------------------------------------------------
 
     @property
+    def processed_tokens(self) -> int:
+        """Every token the model handled, at face value: input + output +
+        cache read + cache write. Distinct from billed cost, which weights
+        each class differently. This is the canonical sum; nothing else
+        should add these four up independently."""
+        return (self.input_tokens + self.output_tokens
+                + self.cache_read_tokens + self.cache_write_tokens)
+
+    @property
     def tool_sequence(self) -> list[str]:
         """Ordered tool names. This is what evals assert against."""
         return [call.name for call in self.tool_calls]
@@ -122,6 +143,7 @@ class Trace:
         if not include_raw:
             for call in payload["tool_calls"]:
                 call.pop("raw_result", None)
+                call.pop("provenance", None)
         return payload
 
     def save(self, directory: Path | None = None) -> Path:

@@ -97,9 +97,15 @@ class Router:
     def __init__(self, predictor: CostPredictor | None = None):
         self.predictor = predictor or CostPredictor.from_disk()
 
-    def decide(self, question: str) -> Decision:
-        return route(self.predictor.predict(question))
+    def decide(self, question: str, exclude_question: str | None = None) -> Decision:
+        return route(self.predictor.predict(question, exclude_question=exclude_question))
 
     @property
     def history_size(self) -> int:
         return len(self.predictor.runs)
+
+    @property
+    def corpus_report(self):
+        """What the predictor loaded and what it rejected — so a thin corpus
+        is visible rather than silently routing everything to default."""
+        return self.predictor.report

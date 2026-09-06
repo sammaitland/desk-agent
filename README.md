@@ -624,13 +624,64 @@ policy nobody can explain is one nobody can audit. And it is conservative:
 predicted cost. Any doubt routes to `standard`. Every decision records its
 reason on the trace.
 
-### The claim, and how it is tested
+### The measurement architecture
 
-The bar is **no worse on pass rate**. A router that saves 40% and fails two
-more cases has traded quality for a number. `--compare-routing` runs every
-case twice — baseline, then routed — and reports tokens, price-weighted cost
-and pass rate side by side, per tier. Held-out cases are the honest measure,
-because the router's thresholds were set looking at development traces.
+A saving is only a claim if the measurement is sound, and the first version of
+this measurement had two leaks that external review caught: held-out traces
+could enter the predictor's corpus, and a question could be its own nearest
+neighbour. Both would have produced a "no worse" result that meant nothing.
+
+The corrected design:
+
+**An explicit baseline corpus.** `--build-baseline` generates the router's
+training traces from development cases only, under a fixed and recorded
+configuration (Sonnet, 8 turns, caching on, compression off, routing off),
+into `traces/baseline/`. The predictor loads nothing else: traces with an
+older schema, traces from held-out questions, and untagged ad-hoc runs are all
+rejected, and the rejection counts are reported so a thin corpus is visible.
+
+**Leave-one-question-out.** When the comparison routes a development case, the
+predictor excludes every run of that question — not just one file — so it
+cannot find itself.
+
+**Three arms**, not two: baseline, compression-only, routed. Two arms confound
+the mechanisms; three isolate each. If compression saves 30% and routed saves
+32%, routing contributed two points and the interesting number is compression.
+
+**Full cost accounting.** Four token classes at four rates — input, output,
+cache read (~10%), cache write (~125%) — and two figures: processed tokens
+(what the model handled) and price-weighted cost (what it was billed). They
+diverge under caching and under Haiku routing; reporting one misstates the
+saving.
+
+**Casewise, not aggregate.** Every case is reported as regressed, improved or
+unchanged against baseline. "No worse" means no regressions, not equal totals
+— an aggregate would hide a pass→fail behind a fail→pass. The overall
+acceptance criterion requires zero regressions on *every* assessed arm.
+
+**Baseline config is enforced, not trusted.** A trace tagged `baseline` is
+rejected if its recorded configuration differs from the canonical one in any
+field — model, turn budget, caching, compression, routing — or if
+`trace.model` disagrees with what the config claims. The tag says what was
+intended; the config says what happened.
+
+**Cache state is controlled.** The prompt cache is per model, and whichever
+arm runs first on a cold cache pays creation (~125%) while later arms pay
+reads (~10%). Since baseline always runs first, an uncontrolled experiment
+would systematically flatter the other arms. The comparison is therefore
+defined as warm-cache, steady-state: one discarded call per distinct model
+before any measured run, cost excluded and reported. A cold-start run is
+possible and is labelled uncontrolled.
+
+Two of these — the acceptance criterion and the cache protocol — came from a
+second external review after 211 tests were green. The tests proved the code
+executed; they did not prove the experiment supported the claim. Those are
+different things, and the second one is the one that matters.
+
+```bash
+python run_evals.py --build-baseline                       # corpus, dev cases only
+python run_evals.py --compare-routing --include-held-out   # three arms, casewise
+```
 
 Reference points: RouteLLM (Berkeley, ICLR 2025) for classifier-based routing;
 FrugalGPT (Stanford) for the cascade alternative. Their headline savings were
