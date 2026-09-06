@@ -579,6 +579,70 @@ client in the loop.
 Built against langfuse 4.x, the OpenTelemetry-based rewrite from March 2026.
 Langfuse was acquired by ClickHouse in January 2026 and remains MIT-licensed.
 
+## Phase 9 — Cost-aware routing
+
+```bash
+python cli.py "what does tail mean?" --routed --trace     # router picks the tier
+python cli.py "..." --compress                             # compression alone
+python run_evals.py --compare-routing --include-held-out   # the measurement
+```
+
+Predicts what a query will cost before it runs, selects a model and turn
+budget accordingly, and compresses stale tool results so any path costs less.
+Then measures whether it was worth it.
+
+### The idea, in one sentence
+
+The trading system replaced a fixed basis-point cost assumption with a
+spread-based model conditioned on observable pre-trade quantities. This is the
+same move applied to inference: predict the cost of the investigation path
+from what is visible before the model runs, then measure what it actually cost.
+
+### Three mechanisms
+
+**Compression** (`src/routing/compression.py`). Token cost is dominated by
+tool results resent on every turn. After a result has been read and the model
+has written its next turn, the raw rows are replaced by the summary line every
+tool already returns. Layer one of the standard three-layer cascade — compress
+outputs, then sliding window, then summarise — and only layer one, because it
+is the cheapest and safest. On a three-turn investigation it removes about a
+third of the history resent. Token-level compressors are deliberately not used:
+they mangle the structured content agents act on.
+
+**Prediction** (`src/routing/predictor.py`). kNN over the system's own saved
+traces. Embed the question with the same vectoriser the documentation search
+uses, find the nearest past questions, read their tool sequence and token cost.
+No training; the trace store is the training set and it grows with use. A 2025
+result showed simple kNN matching complex learned routers, and kNN needs nothing
+this system did not already have. A question with no near neighbour reports
+cold start rather than a low-confidence guess dressed as a prediction.
+
+**Routing** (`src/routing/router.py`). Three tiers — light (Haiku, 3 turns),
+standard (Sonnet, 8), deep (Sonnet, 12). The rule is readable on purpose: a
+policy nobody can explain is one nobody can audit. And it is conservative:
+`light` needs high confidence *and* a single predicted tool *and* a low
+predicted cost. Any doubt routes to `standard`. Every decision records its
+reason on the trace.
+
+### The claim, and how it is tested
+
+The bar is **no worse on pass rate**. A router that saves 40% and fails two
+more cases has traded quality for a number. `--compare-routing` runs every
+case twice — baseline, then routed — and reports tokens, price-weighted cost
+and pass rate side by side, per tier. Held-out cases are the honest measure,
+because the router's thresholds were set looking at development traces.
+
+Reference points: RouteLLM (Berkeley, ICLR 2025) for classifier-based routing;
+FrugalGPT (Stanford) for the cascade alternative. Their headline savings were
+benchmark-specific; so is whatever this reports.
+
+### What the router cannot do
+
+It predicts the cost of the investigation the agent will *probably* take, from
+questions it has *already* seen. It does not know whether Haiku will get a
+`light` answer right — only the live comparison knows that. And it is only as
+good as the trace store: a system with ten traces routes ten questions well.
+
 ## Next
 
 Real paper-account data, and a production version at operational-data.

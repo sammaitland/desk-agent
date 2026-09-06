@@ -26,6 +26,7 @@ from sqlalchemy.engine import Connection
 
 from src.agent.prompt import build_system_prompt
 from src.agent.trace import Trace
+from src.routing.compression import compress_history, strip_private_keys
 from src.tools import TOOL_SCHEMAS, dispatch
 
 MODEL = "claude-sonnet-4-6"
@@ -110,6 +111,8 @@ def run_agent(
     model: str = MODEL,
     max_turns: int = MAX_TURNS,
     save_trace: bool = False,
+    compress: bool = False,
+    routing: dict | None = None,
 ) -> Trace:
     """Answer one question, returning the full trace.
 
@@ -118,6 +121,8 @@ def run_agent(
     """
     client = client or build_client()
     trace = Trace(question=question)
+    trace.model = model
+    trace.routing = routing
     system = _cached_system(build_system_prompt(_blotter_context(conn)))
     tools = _cached_tools(TOOL_SCHEMAS)
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
@@ -125,12 +130,15 @@ def run_agent(
     try:
         for turn in range(1, max_turns + 1):
             trace.turns = turn
+            if compress:
+                messages, removed = compress_history(messages, current_turn=turn)
+                trace.compressed_chars += removed
             response = client.messages.create(
                 model=model,
                 max_tokens=MAX_TOKENS,
                 system=system,
                 tools=tools,
-                messages=messages,
+                messages=strip_private_keys(messages),
             )
             trace.record_usage(getattr(response, "usage", None))
 
@@ -153,7 +161,7 @@ def run_agent(
                 result = dispatch(block.name, dict(block.input), conn)
                 elapsed = int((time.perf_counter() - started) * 1000)
                 trace.record_tool(block.name, dict(block.input), result, elapsed, turn)
-                results.append(_tool_result_block(block.id, result))
+                results.append({**_tool_result_block(block.id, result), "_turn": turn})
 
             messages.append({"role": "user", "content": results})
 
@@ -170,6 +178,32 @@ def run_agent(
     except Exception as exc:  # transport, auth, rate limit
         trace.error = f"{type(exc).__name__}: {exc}"
         return _finish(trace, f"The request failed: {trace.error}", "error", save_trace)
+
+
+def run_agent_routed(
+    question: str,
+    conn: Connection,
+    client: MessagesClient | None = None,
+    router=None,
+    save_trace: bool = False,
+) -> Trace:
+    """Route first, then run with the chosen tier.
+
+    The decision is recorded on the trace, so an eval can tell which tier
+    answered and whether the router's prediction matched what actually ran.
+    """
+    from src.routing.router import Router
+
+    router = router or Router()
+    decision = router.decide(question)
+    return run_agent(
+        question, conn, client=client,
+        model=decision.tier.model,
+        max_turns=decision.tier.max_turns,
+        compress=decision.tier.compress,
+        routing=decision.as_dict(),
+        save_trace=save_trace,
+    )
 
 
 def _serialise(content) -> list[dict[str, Any]]:

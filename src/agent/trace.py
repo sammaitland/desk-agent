@@ -62,6 +62,9 @@ class Trace:
     stop_reason: str | None = None
     error: str | None = None
     langfuse_trace_id: str | None = None   # set when exported; used for scoring
+    model: str | None = None
+    routing: dict | None = None             # the router's decision, if routed
+    compressed_chars: int = 0               # history removed by compression
 
     _clock: float = field(default_factory=time.perf_counter, repr=False)
 
@@ -133,9 +136,12 @@ class Trace:
         lines = [
             f"question   {self.question}",
             f"run_id     {self.run_id}",
+            f"model      {self.model or '-'}"
+            + (f"   tier {self.routing['tier']} — {self.routing['reason']}" if self.routing else ""),
             f"turns      {self.turns}   tools {len(self.tool_calls)}   "
             f"tokens {self.input_tokens}in/{self.output_tokens}out"
             + (f" (+{self.cache_read_tokens} cached)" if self.cache_read_tokens else "")
+            + (f" (-{self.compressed_chars // 4} compressed)" if self.compressed_chars else "")
             + f"   {self.duration_ms}ms",
             "",
         ]

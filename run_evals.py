@@ -6,6 +6,7 @@
     python run_evals.py --case false_premise   # one case
     python run_evals.py --show-answers         # print each answer in full
     python run_evals.py --include-held-out     # the honest measure; run sparingly
+    python run_evals.py --compare-routing --include-held-out   # routed vs baseline
 
 Costs real API calls — roughly one per case plus a turn per tool used. Run on
 demand or nightly, not on every commit; `pytest` covers the loop mechanics for
@@ -33,6 +34,8 @@ def main() -> int:
     parser.add_argument("--show-answers", action="store_true")
     parser.add_argument("--include-held-out", action="store_true",
                         help="also run held-out cases (never tune the prompt against these)")
+    parser.add_argument("--compare-routing", action="store_true",
+                        help="run every case twice, baseline vs routed, and report the delta")
     parser.add_argument("--no-save", action="store_true")
     parser.add_argument("--db-url", default=None)
     args = parser.parse_args()
@@ -48,8 +51,21 @@ def main() -> int:
         print(f"No cases matched. Available: {', '.join(c.name for c in CASES)}", file=sys.stderr)
         return 2
 
-    print(f"\nRunning {len(cases)} case(s) against {args.model}\n")
     engine = get_engine(args.db_url)
+
+    if args.compare_routing:
+        from src.routing.compare import report as routing_report, run_comparison
+        from src.routing.router import Router
+
+        router = Router()
+        print(f"\nRouting comparison over {len(cases)} case(s); "
+              f"predictor trained on {router.history_size} past traces\n")
+        with engine.connect() as conn:
+            comparison = run_comparison(cases, conn, router=router)
+        print(routing_report(comparison))
+        return 0 if comparison.summary()["no_worse"] else 1
+
+    print(f"\nRunning {len(cases)} case(s) against {args.model}\n")
     with engine.connect() as conn:
         suite = run_suite(cases, conn, model=args.model)
 

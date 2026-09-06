@@ -30,6 +30,10 @@ def main() -> int:
     parser.add_argument("--save-trace", action="store_true", help="write the trace to traces/")
     parser.add_argument("--model", default=MODEL)
     parser.add_argument("--max-turns", type=int, default=MAX_TURNS)
+    parser.add_argument("--routed", action="store_true",
+                        help="let the router pick model and budget from past traces")
+    parser.add_argument("--compress", action="store_true",
+                        help="compress stale tool results in history")
     parser.add_argument("--db-url", default=None)
     args = parser.parse_args()
 
@@ -37,10 +41,16 @@ def main() -> int:
 
     engine = get_engine(args.db_url)
     with engine.connect() as conn:
-        trace = run_agent(
-            args.question, conn,
-            model=args.model, max_turns=args.max_turns, save_trace=args.save_trace,
-        )
+        if args.routed:
+            from src.agent.loop import run_agent_routed
+
+            trace = run_agent_routed(args.question, conn, save_trace=args.save_trace)
+        else:
+            trace = run_agent(
+                args.question, conn,
+                model=args.model, max_turns=args.max_turns,
+                save_trace=args.save_trace, compress=args.compress,
+            )
 
     if args.trace:
         print(trace.render())
