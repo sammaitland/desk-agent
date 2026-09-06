@@ -20,7 +20,9 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   agent:
-    build: .
+    build:
+      context: .
+      target: base
     env_file: .env
     environment:
       DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/blotter
@@ -32,7 +34,9 @@ services:
       - ./traces:/app/traces
 
   slack:
-    build: .
+    build:
+      context: .
+      target: base
     env_file: .env
     environment:
       DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/blotter
@@ -41,6 +45,17 @@ services:
         condition: service_healthy
     command: ["-m", "src.slack.bot"]
     restart: unless-stopped
+
+  # Test stage: pytest and the test suite, against the same Postgres.
+  test:
+    build:
+      context: .
+      target: test
+    environment:
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/blotter
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   pgdata:

@@ -85,5 +85,21 @@ def rounded(expression: str, places: int = 2) -> str:
     return f"ROUND(CAST({expression} AS NUMERIC), {places})"
 
 
+def clamp_limit(limit) -> int:
+    """Coerce a requested row limit into [1, MAX_ROWS].
+
+    `min(limit, MAX_ROWS)` alone accepted negative numbers, and SQLite treats
+    LIMIT -1 as no limit at all — external review returned 1,298 rows with
+    truncated=False. Non-integers and zero are also invalid; all collapse to
+    the safe range rather than raising, so a bad argument degrades to a
+    bounded result instead of an error the model must recover from.
+    """
+    try:
+        value = int(limit)
+    except (TypeError, ValueError):
+        return MAX_ROWS
+    return max(1, min(value, MAX_ROWS))
+
+
 def pct(numerator: int, denominator: int) -> float:
     return round(100.0 * numerator / denominator, 2) if denominator else 0.0

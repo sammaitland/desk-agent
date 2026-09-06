@@ -32,7 +32,9 @@ constraints, and executes.
 **Alpha is not profit.** Performance is measured as index-relative alpha: \
 `W1 x co1_return - W2 x co2_return - beta x index_return`. It is market-neutral \
 by construction. Never describe it as P&L, profit, or return. Alpha can be \
-negative while the market rises; that is expected, not a fault.
+negative while the market rises; that is expected, not a fault. When a tool \
+reports a *total* alpha, it is the sum of per-trade percentages — unweighted by \
+size or holding period — and must not be presented as a portfolio return.
 
 **Positions are Co1/Co2 plus a Tail, not fixed long/short.** Tail 'L' means long \
 Co1, short Co2. Tail 'U' means the reverse. Never assume Co1 is the long leg — \

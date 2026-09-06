@@ -28,9 +28,8 @@ from src.generate_blotter import Generator
 
 
 @pytest.fixture(scope="module")
-def conn(tmp_path_factory):
-    db = tmp_path_factory.mktemp("agent") / "blotter.db"
-    engine = get_engine(f"sqlite:///{db}")
+def conn(blotter_url):
+    engine = get_engine(blotter_url)
     create_schema(engine)
     gen = Generator(seed=42, days=90)
     gen.run()
@@ -245,6 +244,27 @@ def test_trace_serialises_and_saves(conn, tmp_path):
     assert payload["question"] == "What broke?"
     assert payload["tool_sequence"] == ["detect_anomalies"]
     assert payload["answer"] == "Two halts last week."
+
+
+def test_saved_trace_supports_the_same_audit(conn, tmp_path):
+    """External review: save() stripped raw results and provenance, so the
+    numeric-fidelity check that passed live could not be re-run from disk."""
+    from src.evals.checks import numeric_fidelity
+
+    client = ScriptedClient([
+        tool_turn("alpha_attribution", {"group_by": "idx"}),
+        final_turn("Summed per-trade alpha was 88.87%."),
+    ])
+    trace = run_agent("q", conn, client=client)
+    live = numeric_fidelity()(trace)
+
+    path = trace.save(tmp_path)
+    saved = json.loads(path.read_text())
+    call = saved["tool_calls"][0]
+    assert "raw_result" in call and call["raw_result"] is not None
+    assert "provenance" in call and call["provenance"]
+    # The evidence needed to re-verify a stated figure is on disk.
+    assert "measure" in call["provenance"]
 
 
 def test_trace_renders_readably(conn):

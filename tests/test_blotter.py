@@ -18,9 +18,8 @@ from src.generate_blotter import Generator
 
 
 @pytest.fixture(scope="module")
-def conn(tmp_path_factory):
-    db = tmp_path_factory.mktemp("blotter") / "test.db"
-    engine = get_engine(f"sqlite:///{db}")
+def conn(blotter_url):
+    engine = get_engine(blotter_url)
     create_schema(engine)
     gen = Generator(seed=42, days=90)
     gen.run()
@@ -52,6 +51,36 @@ def test_position_multiplier_matches_bucket(conn):
 def test_leg_weights_sum_to_one(conn):
     bad = scalar(conn, "SELECT COUNT(*) FROM positions WHERE ABS(w1 + w2 - 1.0) > 1e-9")
     assert bad == 0
+
+
+# --- alpha formula --------------------------------------------------------
+
+def test_alpha_attaches_each_weight_to_its_own_leg():
+    """w1 sizes Co1 and w2 sizes Co2. The weight that sized a leg must multiply
+    that leg's return, whichever leg is long. External review found the U-tail
+    calculation had them crossed."""
+    from src.generate_blotter import Generator
+
+    l_pos = {"tail": "L", "w1": 0.4, "w2": 0.6, "beta": 0.0}
+    u_pos = {"tail": "U", "w1": 0.4, "w2": 0.6, "beta": 0.0}
+    # Co1 flat, Co2 up 10%, index flat.
+    assert Generator._alpha(l_pos, 0.0, 0.10, 0.0) == pytest.approx(-0.06)  # short Co2 at 0.6
+    assert Generator._alpha(u_pos, 0.0, 0.10, 0.0) == pytest.approx(+0.06)  # long Co2 at 0.6
+    # Co1 up 10%, Co2 flat.
+    assert Generator._alpha(l_pos, 0.10, 0.0, 0.0) == pytest.approx(+0.04)  # long Co1 at 0.4
+    assert Generator._alpha(u_pos, 0.10, 0.0, 0.0) == pytest.approx(-0.04)  # short Co1 at 0.4
+
+
+def test_net_beta_sign_follows_tail():
+    """For a U-tail the long leg is Co2, so net beta is w2*b2 - w1*b1 —
+    the mirror of the L formula, not the same formula with legs relabelled."""
+    from src.generate_blotter import Generator
+
+    assert Generator._net_beta("L", 0.6, 0.4, 1.0, 1.0) == pytest.approx(+0.2)
+    assert Generator._net_beta("U", 0.6, 0.4, 1.0, 1.0) == pytest.approx(-0.2)
+    # Unequal betas: a lighter leg with higher beta can dominate.
+    assert Generator._net_beta("L", 0.5, 0.5, 0.8, 1.2) == pytest.approx(-0.2)
+    assert Generator._net_beta("U", 0.5, 0.5, 0.8, 1.2) == pytest.approx(+0.2)
 
 
 # --- economics ------------------------------------------------------------

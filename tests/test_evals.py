@@ -171,9 +171,47 @@ def test_retrieval_floor_is_a_prompt_constant():
     assert numeric_fidelity()(trace).passed
 
 
-def test_passes_when_no_tools_were_called():
-    """Nothing to verify against is not a failure — other checks catch that."""
+def test_no_tools_and_no_figures_passes():
     assert numeric_fidelity()(make_trace("No data available.")).passed
+
+
+def test_no_tools_but_a_figure_fails():
+    """External review reproduced a pass for an invented 9,876.54% with no tool
+    evidence. With no tools, any non-constant figure is unsupported."""
+    result = numeric_fidelity()(make_trace("Alpha was 9,876.54% last week."))
+    assert not result.passed and "no tools ran" in result.detail
+
+
+def test_no_tools_but_only_prompt_constants_passes():
+    trace = make_trace("Limit orders time out after 45 seconds; the spread cap is 24bps.")
+    assert numeric_fidelity()(trace).passed
+
+
+def test_sign_flip_is_rejected():
+    """External review: +7.89% passed against a tool that returned -7.89%.
+    Signs are now extracted and must match."""
+    trace = make_trace("Alpha was +7.89% on that trade.",
+                       [("explain_position", {}, "s", {"final_alpha_return_pct": -7.89})])
+    assert not numeric_fidelity()(trace).passed
+    trace = make_trace("Alpha was -7.89% on that trade.",
+                       [("explain_position", {}, "s", {"final_alpha_return_pct": -7.89})])
+    assert numeric_fidelity()(trace).passed
+
+
+@pytest.mark.parametrize("dash", ["-", "\u2212", "\u2013", "\u2014"])
+def test_all_dash_forms_read_as_negative(dash):
+    trace = make_trace(f"Alpha was {dash}1.197%.",
+                       [("t", {}, "s", {"alpha": -1.197})])
+    assert numeric_fidelity()(trace).passed
+
+
+def test_model_arguments_are_not_evidence():
+    """A figure the model itself passed as an argument does not support the
+    same figure in its answer. limit=42 then "42 orders" is circular."""
+    trace = make_trace("I examined 42 orders.",
+                       [("query_blotter", {"entity": "orders", "limit": 42},
+                         "orders returned", [{"order_id": "x"}])])
+    assert not numeric_fidelity()(trace).passed
 
 
 # --- behavioural checks ---------------------------------------------------

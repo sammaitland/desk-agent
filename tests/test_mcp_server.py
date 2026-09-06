@@ -22,12 +22,11 @@ from src.tools import TOOLS
 
 
 @pytest.fixture(scope="module")
-def server(tmp_path_factory):
+def server(blotter_url):
     """Point the server at a purpose-built blotter rather than the dev one."""
     from src.mcp_server import server as module
 
-    db = tmp_path_factory.mktemp("mcp") / "blotter.db"
-    engine = get_engine(f"sqlite:///{db}")
+    engine = get_engine(blotter_url)
     create_schema(engine)
     gen = Generator(seed=42, days=90)
     gen.run()

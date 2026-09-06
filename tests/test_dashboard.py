@@ -22,11 +22,10 @@ from src.generate_blotter import Generator
 
 
 @pytest.fixture(scope="module")
-def dashboard(tmp_path_factory):
+def dashboard(blotter_url):
     from src.dashboard import data as module
 
-    db = tmp_path_factory.mktemp("dash") / "blotter.db"
-    engine = get_engine(f"sqlite:///{db}")
+    engine = get_engine(blotter_url)
     create_schema(engine)
     gen = Generator(seed=42, days=90)
     gen.run()

@@ -12,6 +12,7 @@ from sqlalchemy.engine import Connection
 
 from src.tools.base import (
     MAX_ROWS,
+    clamp_limit,
     ToolResult,
     date_clause,
     empty,
@@ -47,7 +48,7 @@ def query_blotter(
     open/closed for positions and Filled/Partial/Failed for orders.
     """
     start, end = resolve_window(conn, start_date, end_date)
-    limit = min(limit, MAX_ROWS)
+    limit = clamp_limit(limit)
     params = {"start_date": start, "end_date": end, "limit": limit}
     where = []
 
@@ -217,7 +218,7 @@ def explain_rejection(
     the whole rejection picture for a date window.
     """
     start, end = resolve_window(conn, start_date, end_date)
-    params = {"start_date": start, "end_date": end, "limit": min(limit, MAX_ROWS)}
+    params = {"start_date": start, "end_date": end, "limit": clamp_limit(limit)}
     where = [date_clause("evaluated_at")]
 
     if pair:

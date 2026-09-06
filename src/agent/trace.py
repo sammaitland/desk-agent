@@ -147,10 +147,19 @@ class Trace:
         return payload
 
     def save(self, directory: Path | None = None) -> Path:
+        """Persist the trace with its full evidence.
+
+        Saved with include_raw=True. An earlier version saved the display
+        form, which strips raw tool results and provenance — so the numeric
+        fidelity check could run against a live trace but not against the
+        same trace reloaded from disk. A trace that cannot support a later
+        audit is a log, not a trace. The display form stays for render().
+        """
         directory = directory or TRACE_DIR
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"trace_{self.run_id}.json"
-        path.write_text(json.dumps(self.as_dict(), indent=2), encoding="utf-8")
+        path.write_text(json.dumps(self.as_dict(include_raw=True), indent=2, default=str),
+                        encoding="utf-8")
         return path
 
     def render(self) -> str:

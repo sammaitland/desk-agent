@@ -13,5 +13,4 @@ charts/
 traces/
 eval_results/
 
-tests/
 .DS_Store

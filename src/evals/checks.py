@@ -46,7 +46,13 @@ _TAG = re.compile(r"\b[A-Z]{3}_[A-Z.]+_[A-Z.]+_[LU]_\d{8}_\d{3}\b")
 _ID = re.compile(r"\b(?:ord|pos|sig|fil|evt|chk|alc|run|evl|ib)_[0-9a-f]{6,}\b")
 # Trailing guard is (?!\d) not (?!\w): a figure is usually followed by its
 # unit ("4.8bps", "12%"), and rejecting those truncates 4.8 to 4.
-_NUMBER = re.compile(r"(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?!\d)")
+# Optional sign captured explicitly. Answers render negatives with ASCII
+# hyphens, en-dashes, em-dashes or the minus sign; all four are recognised so
+# a sign can be preserved rather than discarded. A sign must be adjacent to
+# the digits — "AAPL - 3" is not negative three.
+_NUMBER = re.compile(
+    r"(?<![\w.])(?P<sign>[-\u2212\u2013\u2014])?(?P<whole>\d{1,3}(?:,\d{3})+|\d+)(?:\.(?P<frac>\d+))?(?!\d)"
+)
 
 
 @dataclass
@@ -71,9 +77,12 @@ def _strip_non_claims(text: str) -> str:
 def _numbers_in_text(text: str) -> list[float]:
     values = []
     for match in _NUMBER.finditer(_strip_non_claims(text)):
-        whole = match.group(1).replace(",", "")
-        frac = match.group(2)
-        values.append(float(f"{whole}.{frac}" if frac else whole))
+        whole = match.group("whole").replace(",", "")
+        frac = match.group("frac")
+        value = float(f"{whole}.{frac}" if frac else whole)
+        if match.group("sign"):
+            value = -value
+        values.append(value)
     return values
 
 
@@ -102,15 +111,14 @@ def _supported(value: float, sources: set[float], tolerance: float = 0.01) -> bo
     """
     if value in sources or value in PROMPT_CONSTANTS:
         return True
-    # Compare magnitudes: answers render negatives with en/em dashes that the
-    # extractor cannot distinguish from ordinary hyphenation, so a stated
-    # "-1.197%" arrives here as 1.197.
-    value = abs(value)
-    if value in {abs(v) for v in PROMPT_CONSTANTS}:
-        return True
-    for raw in sources:
-        source = abs(raw)
-        if abs(source - value) <= max(source * tolerance, 0.05):
+    for source in sources:
+        # Same sign required. An earlier version compared magnitudes to cope
+        # with en-dash negatives, which let +7.89 pass against a tool that
+        # returned -7.89. The extractor now preserves signs, so this can be
+        # strict. Zero is sign-neutral.
+        if (source < 0) != (value < 0) and source != 0 and value != 0:
+            continue
+        if abs(source - value) <= max(abs(source) * tolerance, 0.05):
             return True
         # Percentages stated as their decimal equivalent, or vice versa.
         if source and abs(source * 100 - value) <= 0.05:
@@ -124,7 +132,9 @@ def _tool_numbers(trace: Trace) -> set[float]:
     numbers: set[float] = set()
     for call in trace.tool_calls:
         _numbers_in_payload(call.summary, numbers)
-        _numbers_in_payload(call.arguments, numbers)
+        # Arguments are deliberately NOT evidence. A model that passes
+        # limit=42 and then states "42 orders" has supported the figure with
+        # its own request, not with a measurement.
         raw = getattr(call, "raw_result", None)
         if raw is not None:
             _numbers_in_payload(raw, numbers)
@@ -207,9 +217,18 @@ def numeric_fidelity(max_unsupported: int = 0) -> Check:
     """
     def check(trace: Trace) -> CheckResult:
         sources = _tool_numbers(trace)
-        if not sources:
-            return CheckResult("numeric fidelity", True, "no tool numbers to check against")
         stated = _numbers_in_text(trace.answer)
+        if not sources:
+            # No tool ran. Any figure that is not a prompt constant is
+            # unsupported by definition. An earlier version passed this case
+            # outright, which let "9,876.54%" through with no evidence at all.
+            unsupported = [v for v in stated if v not in PROMPT_CONSTANTS]
+            passed = len(unsupported) <= max_unsupported
+            return CheckResult(
+                "numeric fidelity", passed,
+                "" if passed else f"no tools ran; {len(unsupported)} unsupported: "
+                                  f"{sorted(set(unsupported))[:8]}",
+            )
         unsupported = [v for v in stated if not _supported(v, sources)]
         passed = len(unsupported) <= max_unsupported
         return CheckResult(

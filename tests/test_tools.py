@@ -23,9 +23,8 @@ from src.tools.base import ToolResult
 
 
 @pytest.fixture(scope="module")
-def conn(tmp_path_factory):
-    db = tmp_path_factory.mktemp("tools") / "blotter.db"
-    engine = get_engine(f"sqlite:///{db}")
+def conn(blotter_url):
+    engine = get_engine(blotter_url)
     create_schema(engine)
     gen = Generator(seed=42, days=90)
     gen.run()
@@ -150,6 +149,50 @@ def test_explain_rejection_tallies_reasons(conn):
     result = dispatch("explain_rejection", {"limit": 30}, conn)
     tally = result.provenance["reason_counts"]
     assert tally and sum(tally.values()) == len(result.data)
+
+
+# --- fill aggregation ------------------------------------------------------
+
+def test_multiple_fills_are_quantity_weighted(conn):
+    """External review: one share at mid plus 99 shares 1% above reported 0bps
+    because the first fill row was taken. The fill price must be the
+    quantity-weighted average across all fills for the order."""
+    order_id = conn.execute(text(
+        "SELECT order_id FROM orders WHERE status='Filled' AND side='BUY' LIMIT 1")).scalar()
+    mid = conn.execute(text("SELECT arrival_mid FROM orders WHERE order_id=:o"),
+                       {"o": order_id}).scalar()
+    conn.execute(text("DELETE FROM fills WHERE order_id=:o"), {"o": order_id})
+    conn.execute(text("""INSERT INTO fills (fill_id, order_id, quantity, price, filled_at, commission)
+                         VALUES ('fx1', :o, 1, :mid, '2026-08-20 15:00:00', 0.1),
+                                ('fx2', :o, 99, :high, '2026-08-20 15:00:01', 0.5)"""),
+                 {"o": order_id, "mid": mid, "high": round(mid * 1.01, 4)})
+    conn.commit()
+    detail = dispatch("execution_quality", {"order_id": order_id}, conn).data
+    # 99% of the quantity filled 100bps above mid -> ~99bps weighted.
+    assert 95 < detail["slippage_bps"] < 100, detail["slippage_bps"]
+    assert detail["fill_count"] == 2
+
+
+def test_aggregate_counts_orders_not_fill_rows(conn):
+    """Joining fills directly would count an order with two fills twice."""
+    orders_with_fills = conn.execute(text(
+        "SELECT COUNT(DISTINCT order_id) FROM fills")).scalar()
+    totals = dispatch("execution_quality", {}, conn).data["breakdown"][0]
+    assert totals["orders_filled"] == orders_with_fills
+
+
+# --- limit clamping --------------------------------------------------------
+
+@pytest.mark.parametrize("bad", [-1, 0, -500, "abc", None, 10**9])
+def test_limit_is_clamped(conn, bad):
+    """External review: limit=-1 returned 1,298 orders with truncated=False.
+    Every out-of-range or malformed limit must collapse into [1, MAX_ROWS]."""
+    from src.tools.base import MAX_ROWS
+
+    result = dispatch("query_blotter", {"entity": "orders", "limit": bad}, conn)
+    assert 1 <= len(result.data) <= MAX_ROWS
+    if len(result.data) == MAX_ROWS:
+        assert result.provenance["truncated"] is True
 
 
 # --- execution_quality ----------------------------------------------------
@@ -277,6 +320,22 @@ def test_tool_layer_contains_no_write_statements():
 
 def test_db_tools_and_pure_tools_are_disjoint():
     assert not set(DB_TOOLS) & set(PURE_TOOLS)
+
+
+# --- backend selection ----------------------------------------------------
+
+def test_integration_fixture_honours_db_url(blotter_url):
+    """If DB_URL is set the fixtures must use it, or the Postgres CI job tests
+    nothing. Without it, SQLite is the fallback. This test asserts the fixture
+    reflects the environment either way."""
+    import os
+
+    configured = os.getenv("DB_URL")
+    if configured:
+        assert blotter_url == configured
+        assert not blotter_url.startswith("sqlite")
+    else:
+        assert blotter_url.startswith("sqlite:///")
 
 
 # --- SQL portability ------------------------------------------------------

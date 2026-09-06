@@ -1,8 +1,11 @@
-"""V9.4C configuration constants, mirrored from the live system.
+"""Execution and risk parameters for the synthetic blotter.
 
-These values appear in log records and drive filter outcomes, so the generator
-must use the same numbers the real system does — otherwise generated data
-implies thresholds that were never applied.
+Taken from the trading system's documented event schema. These are execution
+constraints — spread caps, timeouts, leverage and sizing limits — not signal
+parameters; the strategy's selection and scoring logic is not represented
+here. They drive the generator's filter outcomes and appear in log records,
+so the synthetic data has to use consistent values or it implies thresholds
+that were never applied.
 """
 
 MAX_ACCOUNT_LEVERAGE = 1.9

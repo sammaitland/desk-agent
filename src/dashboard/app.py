@@ -49,8 +49,9 @@ def main() -> None:
                       help="Cap 1.9x, emergency halt at 1.8x")
     columns[2].metric("Account value", data.format_money(snapshot.get("account_value")))
     columns[3].metric("Closed trades", metrics["trades"])
-    columns[4].metric("Total alpha", f"{metrics['total_alpha']:.1f}%",
-                      help="Index-relative: W1·co1 − W2·co2 − β·index. Not P&L.")
+    columns[4].metric("Σ per-trade alpha", f"{metrics['total_alpha']:.1f}%",
+                      help="Sum of each closed trade's index-relative alpha (W1·co1 − W2·co2 − β·index), "
+                           "unweighted by notional or duration. Not a portfolio return, not P&L.")
     columns[5].metric("Win rate", f"{metrics['win_rate']:.1f}%")
 
     overview, performance, execution, screening, ask = st.tabs(
@@ -121,7 +122,7 @@ def main() -> None:
                 st.dataframe(
                     df[["grouping", "trades", "avg_alpha_pct", "total_alpha_pct",
                         "win_rate_pct", "avg_holding_days"]],
-                    width='stretch', hide_index=True,
+                    use_container_width=True, hide_index=True,
                 )
             st.caption(result["summary"])
 
@@ -155,7 +156,7 @@ def main() -> None:
             st.dataframe(
                 df[["grouping", "orders_filled", "avg_slippage_bps", "worst_slippage_bps",
                     "avg_spread_bps", "timeout_fallbacks", "total_commission"]],
-                width='stretch', hide_index=True,
+                use_container_width=True, hide_index=True,
             )
             st.caption("Positive slippage means the fill was worse than the arrival mid. "
                        "Limit orders above a 24bps spread are routed to market.")
@@ -168,7 +169,7 @@ def main() -> None:
                                   AS NUMERIC), 1) AS slippage_bps
                 FROM orders o JOIN fills f ON f.order_id = o.order_id
                 ORDER BY slippage_bps DESC LIMIT 10""")
-            st.dataframe(worst, width='stretch', hide_index=True)
+            st.dataframe(worst, use_container_width=True, hide_index=True)
 
 
     # --- screening ------------------------------------------------------------
@@ -183,7 +184,7 @@ def main() -> None:
             with left:
                 st.bar_chart(funnel.set_index("outcome")["n"], height=320)
             with right:
-                st.dataframe(funnel, width='stretch', hide_index=True)
+                st.dataframe(funnel, use_container_width=True, hide_index=True)
             st.caption(
                 "Primary filters (spread hurdle, earnings, trend, direction, t-stat) "
                 "run before trade evaluation (bucket, leverage, concentration, factor "
@@ -201,7 +202,7 @@ def main() -> None:
                     f"not evaluated — this view shows rejections only."
                 )
             else:
-                st.dataframe(pd.DataFrame(rejection["data"]), width='stretch',
+                st.dataframe(pd.DataFrame(rejection["data"]), use_container_width=True,
                              hide_index=True)
                 st.caption(rejection["summary"])
 

@@ -13,6 +13,7 @@ from sqlalchemy.engine import Connection
 from src import config as cfg
 from src.tools.base import (
     MAX_ROWS,
+    clamp_limit,
     ToolResult,
     as_date,
     date_clause,
@@ -23,8 +24,23 @@ from src.tools.base import (
     rows_to_dicts,
 )
 
+# Fills are aggregated per order BEFORE joining: one order may fill in several
+# pieces, and joining fills directly would (a) count fill rows as orders and
+# (b) let a single-fill lookup pick whichever row came first. External review
+# demonstrated both: one share at mid plus 99 shares 1% above reported 0bps.
+# The quantity-weighted average price is the only defensible fill price.
+FILLS_PER_ORDER = """
+    (SELECT order_id,
+            SUM(quantity * price) / SUM(quantity) AS price,
+            SUM(quantity)                          AS quantity,
+            SUM(commission)                        AS commission,
+            COUNT(*)                               AS fill_count
+     FROM fills GROUP BY order_id) f
+"""
+
 # Slippage is signed by direction: positive means the fill was worse than the
-# arrival mid (paid up on a buy, sold down on a sell).
+# arrival mid (paid up on a buy, sold down on a sell). Uses the aggregated
+# fill price above.
 SLIPPAGE_BPS = ("(CASE WHEN o.side = 'BUY' THEN 1 ELSE -1 END) "
                 "* (f.price - o.arrival_mid) / o.arrival_mid * 10000")
 
@@ -68,8 +84,9 @@ def execution_quality(
                    o.filled_shares, o.status, o.spread_bps, o.arrival_mid, o.bid, o.ask,
                    o.limit_price, o.fell_back_to_mkt, o.fallback_reason,
                    o.elapsed_seconds, o.placed_at, f.price AS fill_price,
-                   f.commission, ROUND(CAST({SLIPPAGE_BPS} AS NUMERIC), 2) AS slippage_bps
-            FROM orders o LEFT JOIN fills f ON f.order_id = o.order_id
+                   f.fill_count, f.commission,
+                   ROUND(CAST({SLIPPAGE_BPS} AS NUMERIC), 2) AS slippage_bps
+            FROM orders o LEFT JOIN {FILLS_PER_ORDER} ON f.order_id = o.order_id
             WHERE o.order_id = :order_id"""), params).mappings().first()
         if row is None:
             return empty(f"No order found with id '{order_id}'.", order_id=order_id)
@@ -105,7 +122,7 @@ def execution_quality(
                SUM(CASE WHEN o.order_type = 'LMT' THEN 1 ELSE 0 END) AS limit_orders,
                SUM(CASE WHEN o.order_type = 'MKT' THEN 1 ELSE 0 END) AS market_orders,
                ROUND(CAST(SUM(f.commission) AS NUMERIC), 2) AS total_commission
-        FROM orders o JOIN fills f ON f.order_id = o.order_id
+        FROM orders o JOIN {FILLS_PER_ORDER} ON f.order_id = o.order_id
         WHERE {' AND '.join(where)}
         {group_clause} {order_clause} LIMIT {MAX_ROWS}"""), params))
 
@@ -207,8 +224,10 @@ def alpha_attribution(
             "window": [start, end], "group_by": group_by, "status": status,
             "rows": len(rows),
             "measure": "index-relative alpha (W1*co1 - W2*co2 - beta*index)",
+            "total_alpha_note": ("sum of per-trade alpha percentages, unweighted by "
+                                 "notional or duration; not a portfolio return"),
         },
-        summary=(f"{trades} closed trades {start} to {end}, total alpha {total}%. "
+        summary=(f"{trades} closed trades {start} to {end}, summed per-trade alpha {total}%. "
                  f"Best {group_by}: {best['grouping']} ({best['total_alpha_pct']}%); "
                  f"worst: {worst['grouping']} ({worst['total_alpha_pct']}%)."),
     )
@@ -234,7 +253,7 @@ def detect_anomalies(
     info, warning or halt.
     """
     start, end = resolve_window(conn, start_date, end_date)
-    params = {"start_date": start, "end_date": end, "limit": min(limit, MAX_ROWS)}
+    params = {"start_date": start, "end_date": end, "limit": clamp_limit(limit)}
     where = [date_clause("occurred_at")]
 
     if severity:

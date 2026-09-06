@@ -4,8 +4,8 @@ A read-only analytics agent over a systematic pairs-trading blotter. Ask a
 question in natural language, get an investigated answer with charts and an
 audit trail.
 
-**State:** Phases 0–8 complete. 170 tests passing. Slack and CLI verified
-against the live API. CI and Docker written but not yet exercised on GitHub.
+**State:** Phases 0–9 complete. 252 tests passing. Slack and CLI verified
+against the live API. CI green on SQLite and PostgreSQL.
 
 ---
 
@@ -140,6 +140,22 @@ Three new eval cases: `design_rationale`, `definition_lookup`, and
 `outside_the_corpus` (held-out). `what_and_why` tests chaining a blotter
 lookup with a documentation search.
 
+### Phase 9 — Cost-aware routing (`src/routing/`)
+
+Predicts a query's cost before it runs by kNN over the system's own baseline
+traces, selects a model and turn budget, and compresses stale tool results so
+any path costs less. Measured under a three-arm comparison (baseline,
+compression-only, routed) with a warm-cache protocol, leave-one-question-out,
+full four-class cost accounting and casewise regression reporting.
+
+**Result** (`docs/EXPERIMENT_routing_2026-09-06.md`): compression reduced
+processed tokens by 15% and price-weighted cost by 29%, with no pass-rate
+change distinguishable from run-to-run variance. Routing was not evaluated —
+the fifteen-question corpus was too small for leave-one-question-out to leave
+neighbours. The suite's noise floor (roughly ±3 cases of 22 between identical
+runs) turned out to be larger than the effect being measured, which is the
+more useful finding.
+
 ### Credentials (`src/env.py`, `.env`)
 
 `.env` at the project root, gitignored, loaded automatically by every entry
@@ -166,28 +182,6 @@ server relying on `export` would fail to authenticate with no obvious cause.
 ---
 
 ## 3. Outstanding items
-
-### Must do before pushing to GitHub
-
-- [x] **README badge URL** updated to `sammaitland`.
-- [ ] **Initialise git.** The directory has never been a repo, so there is no
-      history to clean — a clean starting position. Run `git init`, then read
-      `git status --short` carefully before the first commit: `.env`,
-      `blotter.db`, `charts/`, `traces/`, `eval_results/` and `.venv/` must all
-      be absent.
-- [ ] **Confirm `.env` is not tracked.** `git status --short` must not list it.
-      The `.gitignore` covers it, but verify before the first commit.
-- [ ] **Check no credentials are in `src/env.py`.** It is the loader; it should
-      contain no tokens. `grep -c "sk-ant\|xoxb\|xapp" src/env.py` → 0.
-- [x] **Tokens rotated.** Three credentials were exposed in filenames created by
-      a `printf` redirect that lost its space (`>> .envsk-ant-...`). All three
-      were rotated and the files deleted. A later automated review reported them
-      as a false positive — it checked after the deletion; the finding was real.
-- [x] **LICENCE added** (MIT). Confirm the copyright line reads the current
-      year and your full name.
-- [x] **`.gitignore` hardened** with `.env*` / `!.env.example`, so any future
-      `.env<something>` variant is caught rather than just `.env` exactly.
-- [ ] Push privately first, confirm CI goes green, then decide on public.
 
 ### Known behavioural gaps (measurable, not blocking)
 

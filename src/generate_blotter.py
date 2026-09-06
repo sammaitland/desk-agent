@@ -35,6 +35,7 @@ from datetime import date, datetime, time, timedelta
 from sqlalchemy import text
 
 from src import config as cfg
+from src import env  # noqa: F401  (loads .env so DB_URL is honoured)
 from src.db import create_schema, get_engine, table_counts
 
 UNIVERSE = {
@@ -307,11 +308,31 @@ class Generator:
             pos["last_prices"] = (co1_px, co2_px, idx_px, co1_ret, co2_ret, idx_ret)
 
     @staticmethod
+    def _net_beta(tail, w1, w2, beta_co1, beta_co2):
+        """Net exposure to the index, signed by tail.
+
+        L (long Co1, short Co2):  w1*beta_co1 - w2*beta_co2
+        U (long Co2, short Co1):  w2*beta_co2 - w1*beta_co1
+        """
+        if tail == "L":
+            return round(w1 * beta_co1 - w2 * beta_co2, 4)
+        return round(w2 * beta_co2 - w1 * beta_co1, 4)
+
+    @staticmethod
     def _alpha(pos, co1_ret, co2_ret, idx_ret):
-        """L-tail: W1*co1 - W2*co2 - beta*index. U-tail reverses the legs."""
+        """Index-relative alpha. w1 sizes Co1 and w2 sizes Co2 regardless of tail.
+
+        L-tail (long Co1, short Co2): w1*co1 - w2*co2 - beta*index
+        U-tail (long Co2, short Co1): w2*co2 - w1*co1 - beta*index
+
+        An earlier version attached w1 to co2 for U-tails — the weight that
+        sized one leg multiplied the other leg's return. With Co1 flat, Co2 up
+        10% and weights 40/60, that reported 4% instead of 6%. Caught by
+        external review; the invariant test below guards it now.
+        """
         if pos["tail"] == "L":
             return pos["w1"] * co1_ret - pos["w2"] * co2_ret - pos["beta"] * idx_ret
-        return pos["w1"] * co2_ret - pos["w2"] * co1_ret - pos["beta"] * idx_ret
+        return pos["w2"] * co2_ret - pos["w1"] * co1_ret - pos["beta"] * idx_ret
 
     # ---- terminations ----------------------------------------------------
     def _evaluate_terminations(self, run_id, day, when):
@@ -553,8 +574,9 @@ class Generator:
             # W1*beta_co1 - W2*beta_co2 — near zero when weights are equal,
             # and at most ~0.2 in the skewed buckets. Using a raw ~1.0 beta
             # here over-hedges by roughly 5x and drains alpha in a rising market.
-            beta = round(w1 * self.ticker_betas[row["co1"]]
-                         - w2 * self.ticker_betas[row["co2"]], 4)
+            beta = self._net_beta(tail, w1, w2,
+                                  self.ticker_betas[row["co1"]],
+                                  self.ticker_betas[row["co2"]])
             tag = self._next_tag(row["idx"], row["co1"], row["co2"], tail, day)
             opened_at = when + timedelta(minutes=rng.randint(1, 30))
 

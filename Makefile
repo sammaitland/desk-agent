@@ -36,8 +36,7 @@ dashboard:
 	streamlit run src/dashboard/app.py
 
 docker-test:
-	docker compose run --rm agent -m src.generate_blotter --days 60 --seed 42
-	docker compose run --rm agent -m pytest -q
+	docker compose run --rm test
 
 clean:
 	rm -rf .pytest_cache **/__pycache__ charts traces eval_results
