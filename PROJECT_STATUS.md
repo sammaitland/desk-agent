@@ -241,17 +241,13 @@ server relying on `export` would fail to authenticate with no obvious cause.
 - [x] **Streamlit dashboard** — complete (Phase 7).
 - [ ] **Instruction manual** — a design guide covering every design decision, to
       work through rather than read once.
-- [ ] **Project review** — adversarial questioning on both projects. The
-      trading system is a *methodology* interview (walk-forward, negative
-      controls, behaviour preservation); the desk agent is an *engineering and
-      judgement* interview (why no framework, how hallucinated numbers are
-      prevented, where the automation line was drawn).
+
 - [ ] **Real paper-account data.** Fire up the paper account, let it generate
       real fills, and swap them into the same schema. The whole Phase 0 design
       exists to make this a no-op.
 - [ ] **operational-data production version.** Same architecture, real charging data.
       Green-lit by internal stakeholder. This is the item that converts the work from a
-      prototype into production experience.
+      prototype into a deployed system.
 - [ ] **Red-team / fault-injection harness.** A public analogue of the operational-data
       work: inject faults into the blotter (stale timestamps, reconciliation
       drift, phantom fills) and check whether the agent *detects* them or
