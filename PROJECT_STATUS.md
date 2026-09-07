@@ -228,25 +228,21 @@ server relying on `export` would fail to authenticate with no obvious cause.
       1.8% target, 4.5% × 0.40 stop. Replace with the real values if known.
 - [ ] **VOX** is treated as a sixth index here; in the real system its
       constituents are folded into VGT by clustering. Harmless for synthetic
-      data; note it for reference.
+      data, but a known difference from the source system
+
 
 ### Next work
 
 - [x] **Streamlit dashboard** — complete (Phase 7).
-- [ ] **Instruction manual** — a design guide covering every design decision, to
-      work through rather than read once.
 
 - [ ] **Real paper-account data.** Fire up the paper account, let it generate
       real fills, and swap them into the same schema. The whole Phase 0 design
       exists to make this a no-op.
-- [ ] **operational-data production version.** Same architecture, real charging data.
-      Green-lit by internal stakeholder. This is the item that converts the work from a
-      prototype into a deployed system.
-- [ ] **Red-team / fault-injection harness.** A public analogue of the operational-data
-      work: inject faults into the blotter (stale timestamps, reconciliation
+- [ ] **Red-team / fault-injection harness.**:
+      inject faults into the blotter (stale timestamps, reconciliation
       drift, phantom fills) and check whether the agent *detects* them or
-      confidently narrates corrupted data as fact. Novel, and it extends the
-      validation thread that runs through everything else.
+      confidently narrates corrupted data as fact.
+
 
 ---
 
@@ -276,7 +272,7 @@ version, not across them. Fine for demos and evals; worth knowing.
 
 ---
 
-## 5. Bugs found and fixed — 
+## 5. Bugs found and fixed
 
 These are the substantive ones, mostly caught by tests that existed to catch
 exactly this class of error.
