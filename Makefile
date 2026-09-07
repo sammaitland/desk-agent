@@ -1,4 +1,4 @@
-.PHONY: help install test blotter ask evals slack mcp dashboard docker-test clean
+.PHONY: help install test blotter ask evals critic slack mcp dashboard adapter docker-test clean
 
 help:
 	@echo "install     install in editable mode with dev extras"
@@ -9,6 +9,7 @@ help:
 	@echo "slack       start the Slack bot"
 	@echo "mcp         start the MCP server (stdio)"
 	@echo "dashboard   start the Streamlit dashboard"
+	@echo "adapter     load archived V9.2C output (ARCHIVE=path)"
 	@echo "docker-test run the suite against Postgres in Docker"
 
 install:
@@ -26,6 +27,9 @@ ask:
 evals:
 	python run_evals.py
 
+critic:
+	python run_critic_benchmark.py
+
 slack:
 	python -m src.slack.bot
 
@@ -34,6 +38,9 @@ mcp:
 
 dashboard:
 	streamlit run src/dashboard/app.py
+
+adapter:
+	python run_adapter.py $(ARCHIVE)
 
 docker-test:
 	docker compose run --rm test

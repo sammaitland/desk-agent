@@ -712,3 +712,141 @@ questions it has *already* seen. It does not know whether Haiku will get a
 `light` answer right — only the live comparison knows that. And it is only as
 good as the trace store: a system with ten traces routes ten questions well.
 
+## Adapter — real data in
+
+```bash
+python run_adapter.py ~/Desktop/V9/archive            # load every archived day
+python run_adapter.py ~/Desktop/V9/archive --since 2026-09-08
+```
+
+The trading system writes Excel and a log; the blotter is SQL. `src/adapter/`
+bridges them: read a directory of dated archives (one per trading day), map
+columns, normalise enums, diff consecutive snapshots into `position_updates`,
+and upsert. Idempotent — reloading a day already loaded changes nothing — so
+"archive daily, load whenever" is safe.
+
+**The mapping is data, not code.** Every column and enum lives in
+`src/adapter/mapping.py`, built from a code review's inventory of the live
+system's outputs and marked VERIFY until real files confirm it. The loader
+reports every source column it could not map and every enum value that did not
+normalise; the first real run is expected to produce a long report, and that
+report is the list of corrections.
+
+**Orders, fills, stages and events come from the log**, which needs a parser
+written against a real sample. `LogParser` is the interface; until it is
+filled, those tables stay empty and the report says so.
+
+**The adapter does not import the trading system.** It reads the outputs as
+external data. A bridge that reached into the live-proven code would risk
+changing what it bridges; a test greps for the forbidden imports.
+
+Three things building it against synthetic files revealed before any real
+file existed: positions have a foreign key to instruments, so the adapter
+seeds instruments from every ticker it sees; the schema declared per-leg live
+prices and account value NOT NULL because the synthetic generator always had
+them, and the live system's files do not; and delete-then-insert upserts fail
+the moment a child row references the parent. All three would have failed on
+day one.
+
+## Phase 10 — The Claim Critic
+
+```bash
+python cli.py "what went wrong last week?" --critique   # answer, then attack it
+python run_critic_benchmark.py                          # recall and precision on known-false claims
+```
+
+`numeric_fidelity` verifies that every figure in an answer came from a tool.
+It cannot verify the sentence built around the figures. *"SBUX_BKNG was
+rejected because its notional came within $18 of the $5,000 cap"* passed every
+check and is false — both numbers were real, the causal link was invented, and
+being under a cap is not a breach. That class of error is what the critic
+attacks.
+
+### Three stages, two prompts, one rule
+
+**Extract.** One call reads the answer and lists its claims as JSON, each
+typed — figure, causal, comparative, inferential — and marked checkable or
+not, and stated-as-fact or hedged.
+
+**Verify.** For each checkable claim, a narrow adversarial agent with the same
+tools and a different job: find evidence this claim is wrong. Four turns,
+one claim, a verdict — verified, contradicted, or unverifiable — with the tool
+result that decided it.
+
+**Report.** The answer annotated: contradictions with evidence, and inferences
+the answer stated as fact.
+
+The rule, enforced in code rather than prompt: **a contradiction with no tool
+call behind it is downgraded to unverifiable.** So is a verification. A critic
+that can judge from intuition is a second opinion, and a second opinion is
+what this replaces.
+
+### The asymmetry it exploits
+
+Checking one specific claim against recorded data is far easier than
+producing a correct answer. The critic does not need to be smarter than the
+agent; it needs to be narrower.
+
+### What the first live run taught
+
+The critic's first live run reported 100% recall and 67% precision. Neither
+was a measure of the critic. External review of the 25 saved verifier traces
+found the benchmark had mislabelled a control (zero timeouts, from a
+mistyped event key, when the orders table held ten), built a fixture that
+asked a nonsense question, credited cautions as catches, counted a falsely
+flagged target twice, and let span overlap conflate a true figure with the
+false ranking it sat next to. Underneath, the generator had been logging a
+share-price-vs-cap comparison as a position-size failure — so the "$18
+claim" the critic existed to catch was the agent trying to explain
+inconsistent data. The data was wrong before the agent was.
+
+The critic itself also overreached: it "disproved" an intraday cause from
+entry-to-exit returns over different holding periods, and contradicted a
+true figure because it did not answer the original question.
+
+### What changed
+
+**Expected outcomes, not binary truth.** Each target says what the critic
+should conclude: `contradicted`, `supported`, or `undetermined`. The third
+makes restraint measurable — a confident verdict on a cause the blotter
+cannot settle now counts as an error, not a catch.
+
+**Alignment is a candidate, not an identity.** A claim overlapping one
+target is aligned. A claim overlapping several is ambiguous and reported for
+adjudication. Targets in mixed sentences are cut tight, so "VIS was the
+weakest" and "34.57%" are scored separately.
+
+**Grounding handles aggregates.** Evidence figures are checked against the
+numeric values in successful tool results — not their text, not their
+arguments, not the output of failed or empty calls. "11 partial fills"
+grounds if 11 is a count in a result; "VIS at 34.57%" grounds if 34.57 is in
+a breakdown. Four correct verdicts the first run downgraded now stand
+against their own saved traces.
+
+**Findings and completion are separate.** A malformed extraction entry
+cannot hide a confirmed contradiction; a contradiction cannot hide that other
+claims went unassessed. Empty extraction is never complete, at any answer
+length.
+
+**The verifier judges the claim, not the question**, and is told the
+difference between a recorded fact and a causal explanation: it can verify
+the count and still say the cause is undetermined, and it does not disprove
+a cause by pointing to data that does not measure it.
+
+**Two measurements.** `--atomic` feeds hand-fixed claims straight to the
+verifier, bypassing extraction, so a miss can be placed at the stage that
+lost it.
+
+**Provenance.** Every saved run records source hashes, prompt hashes, the
+case-set hash and a database fingerprint.
+
+The headline numbers from the first run and the next are not comparable:
+the benchmark changed as well as the critic. That is reported separately.
+
+### What it does not do
+
+It checks stated claims against recorded data. It does not evaluate research
+hypotheses, correct for multiple testing, or ask whether the agent looked at
+the right things. Those are the investigator's problems and they are harder.
+This is the component the investigator would need first.
+

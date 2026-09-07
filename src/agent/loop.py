@@ -115,6 +115,7 @@ def run_agent(
     routing: dict | None = None,
     corpus: str | None = None,
     trace_dir=None,
+    system_prompt: str | None = None,
 ) -> Trace:
     """Answer one question, returning the full trace.
 
@@ -128,7 +129,10 @@ def run_agent(
     trace.config = {"model": model, "max_turns": max_turns, "caching": True,
                     "compress": compress, "routed": routing is not None}
     trace.corpus = corpus
-    system = _cached_system(build_system_prompt(_blotter_context(conn)))
+    # The critic reuses this loop with its own instructions. Same tools, same
+    # caching, same tracing — different job.
+    base = system_prompt if system_prompt is not None else build_system_prompt(_blotter_context(conn))
+    system = _cached_system(base)
     tools = _cached_tools(TOOL_SCHEMAS)
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
 

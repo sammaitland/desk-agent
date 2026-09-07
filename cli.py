@@ -34,6 +34,8 @@ def main() -> int:
                         help="let the router pick model and budget from past traces")
     parser.add_argument("--compress", action="store_true",
                         help="compress stale tool results in history")
+    parser.add_argument("--critique", action="store_true",
+                        help="after answering, attack the answer claim by claim")
     parser.add_argument("--db-url", default=None)
     args = parser.parse_args()
 
@@ -56,6 +58,14 @@ def main() -> int:
         print(trace.render())
         print()
     print(trace.answer)
+
+    if args.critique:
+        from src.critic.critique import critique
+
+        with engine.connect() as conn:
+            crit = critique(args.question, trace.answer, conn)
+        print()
+        print(crit.render())
 
     charts = [c for c in trace.tool_calls if c.name == "make_chart"]
     if charts:

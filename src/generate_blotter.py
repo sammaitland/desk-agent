@@ -556,19 +556,49 @@ class Generator:
             idx_px = self.px[(row['idx'], day)]
             q1 = int(notional * w1 / co1_px)
             q2 = int(notional * w2 / co2_px)
-            if q1 < 1 or q2 < 1 or (q1 * co1_px + q2 * co2_px) > cfg.MAX_POSITION_SIZE:
-                # A single share already breaches the size cap: the name cannot
-                # be traded at this notional. Recorded as a rejection rather
-                # than silently rounded up past the limit.
+            # Two distinct checks, recorded distinctly. An earlier version
+            # logged both as "position_size" with current_value = the higher
+            # share price and threshold = the position cap — so a $4,981 share
+            # that could not be bought at a $1,400 notional was recorded as
+            # "position_size 4981.90 vs 5000: Fail", a value under the cap
+            # marked as a breach. That inconsistency is what the agent tried to
+            # explain with "came within $18 of the cap". The data was wrong
+            # before the agent was. External review of the critic traces found
+            # it; the record now says what was actually checked.
+            if q1 < 1 or q2 < 1:
+                leg = row["co1"] if q1 < 1 else row["co2"]
+                px = co1_px if q1 < 1 else co2_px
+                alloc = notional * (w1 if q1 < 1 else w2)
+                self.risk_checks.append({
+                    "check_id": _uid("chk"), "run_id": run_id,
+                    "checked_at": when.isoformat(sep=" ", timespec="seconds"),
+                    "check_name": "min_share_quantity", "subject": row["pair"],
+                    # current_value: the leg's allocated notional; threshold:
+                    # the price of one share. Fail when allocation < one share.
+                    "current_value": round(alloc, 2), "threshold": round(px, 2),
+                    "result": "Fail", "action": "reject_trade",
+                })
+                continue
+            total = q1 * co1_px + q2 * co2_px
+            if total > cfg.MAX_POSITION_SIZE:
                 self.risk_checks.append({
                     "check_id": _uid("chk"), "run_id": run_id,
                     "checked_at": when.isoformat(sep=" ", timespec="seconds"),
                     "check_name": "position_size", "subject": row["pair"],
-                    "current_value": round(max(co1_px, co2_px), 2),
-                    "threshold": cfg.MAX_POSITION_SIZE,
+                    "current_value": round(total, 2), "threshold": cfg.MAX_POSITION_SIZE,
                     "result": "Fail", "action": "reject_trade",
                 })
                 continue
+            # Passing sizing checks are recorded too, so the blotter can answer
+            # "was X checked" and not only "did X fail" — and so a benchmark
+            # can pick a passed check that a critic can actually retrieve.
+            self.risk_checks.append({
+                "check_id": _uid("chk"), "run_id": run_id,
+                "checked_at": when.isoformat(sep=" ", timespec="seconds"),
+                "check_name": "position_size", "subject": row["pair"],
+                "current_value": round(total, 2), "threshold": cfg.MAX_POSITION_SIZE,
+                "result": "Pass", "action": None,
+            })
             # beta in the alpha formula is the position's NET exposure to the
             # index, not a single stock's beta. For a hedged pair this is
             # W1*beta_co1 - W2*beta_co2 — near zero when weights are equal,

@@ -63,9 +63,12 @@ CREATE TABLE portfolio_snapshots (
     run_id                  TEXT PRIMARY KEY,
     snapshot_date           TEXT NOT NULL,
     position_count          INTEGER NOT NULL,
-    account_value           REAL NOT NULL,
+    -- Account value and leverage come from the broker at run time, not from
+    -- the portfolio file. Nullable so a snapshot can be built from the file
+    -- alone and enriched from the log when the parser exists.
+    account_value           REAL,
     total_gross_exposure    REAL NOT NULL,
-    leverage                REAL NOT NULL,
+    leverage                REAL,
     dollar_weighted_beta    REAL,
     staleness_minutes       REAL,
     FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
@@ -164,12 +167,15 @@ CREATE TABLE position_updates (
     tag                     TEXT NOT NULL,
     update_date             TEXT NOT NULL,
     run_id                  TEXT,
-    live_co1_price          REAL NOT NULL,
-    live_co2_price          REAL NOT NULL,
-    live_index_price        REAL NOT NULL,
-    co1_return_pct          REAL NOT NULL,
-    co2_return_pct          REAL NOT NULL,
-    index_return_pct        REAL NOT NULL,
+    -- Leg prices and returns are nullable: the synthetic generator always
+    -- supplies them, but the live system's Portfolio.xlsx carries the alpha
+    -- figure without the per-leg marks. The alpha is the required field.
+    live_co1_price          REAL,
+    live_co2_price          REAL,
+    live_index_price        REAL,
+    co1_return_pct          REAL,
+    co2_return_pct          REAL,
+    index_return_pct        REAL,
     co1_alpha_pct           REAL,
     co2_alpha_pct           REAL,
     live_alpha_return_pct   REAL NOT NULL,
