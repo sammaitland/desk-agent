@@ -712,6 +712,3 @@ questions it has *already* seen. It does not know whether Haiku will get a
 `light` answer right — only the live comparison knows that. And it is only as
 good as the trace store: a system with ten traces routes ten questions well.
 
-## Next
-
-Real paper-account data, and a production version at operational-data.

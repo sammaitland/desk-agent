@@ -464,6 +464,3 @@ rather than event handlers, and why everything touching the database sits
 behind `@st.cache_data` in `src/dashboard/data.py`. Splitting data access out
 of the UI also makes the numbers testable while the layout is not.
 
-## Next
-
-Real paper-account data, and a production version at operational-data.

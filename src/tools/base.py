@@ -13,12 +13,32 @@ tool writes anything.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 MAX_ROWS = 500  # hard cap: keeps tool results inside a sane context budget
+
+
+def _normalise_numbers(value: Any) -> Any:
+    """Give analytical tool outputs the same numeric types on both databases.
+
+    PostgreSQL returns Decimal for NUMERIC expressions; SQLite returns float.
+    Convert at the result boundary, after database arithmetic, so consumers
+    and JSON traces receive numbers consistently. These are approximate
+    analytical metrics, not an exact-decimal accounting ledger.
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {key: _normalise_numbers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalise_numbers(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_normalise_numbers(item) for item in value)
+    return value
 
 
 @dataclass
@@ -28,6 +48,10 @@ class ToolResult:
     data: Any
     provenance: dict[str, Any] = field(default_factory=dict)
     summary: str = ""
+
+    def __post_init__(self) -> None:
+        self.data = _normalise_numbers(self.data)
+        self.provenance = _normalise_numbers(self.provenance)
 
     def as_dict(self) -> dict[str, Any]:
         return {"summary": self.summary, "provenance": self.provenance, "data": self.data}
