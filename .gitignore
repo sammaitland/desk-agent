@@ -28,3 +28,9 @@ dist/
 
 eval_results/
 .claude/
+
+# Editor swap and backup files
+*.swp
+*.swo
+*~
+.DS_Store
