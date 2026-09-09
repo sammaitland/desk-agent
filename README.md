@@ -726,11 +726,56 @@ and upsert. Idempotent — reloading a day already loaded changes nothing — so
 "archive daily, load whenever" is safe.
 
 **The mapping is data, not code.** Every column and enum lives in
-`src/adapter/mapping.py`, built from a code review's inventory of the live
-system's outputs and marked VERIFY until real files confirm it. The loader
-reports every source column it could not map and every enum value that did not
-normalise; the first real run is expected to produce a long report, and that
-report is the list of corrections.
+`src/adapter/mapping.py`. It was first built from a code review's inventory
+and got six things wrong; it is now verified against the real files from the
+live run of 8 September 2026, and the six corrections are recorded in the
+module because each is a trap for anyone who reads the event schema and
+assumes the files match it:
+
+- **`Tag` is not the position tag.** It is an integer row index into the
+  parameters file, unique within a file but repeated across them. Keying on
+  `(run, tag)` collapsed 5,682 real rows into 2,533, each stage silently
+  overwriting the last. Rows are keyed by `(run, stage, tag)`.
+- **`Pair` is hyphenated** in the files, underscored in the schema.
+- **Ticker columns are `Co1`/`Co2`** in the prefilter and shortlist,
+  `Ticker1`/`Ticker2` in the longlist.
+- **`Active` is 0/1**, not Pass/Fail.
+- **`Reason` is free text**, not an enum — *"Trending filter: ASAN - Negative
+  trending: -73.49% excess return over 12M (threshold: -70.00%)"* — so it is
+  classified into a category and the original kept alongside, because the
+  sentence carries the ticker and the magnitude.
+- **The rejected archive is cumulative.** The first real file spanned
+  2025-11-25 to the run date. Loading it wholesale would attribute ten months
+  of rejections to one day; the loader filters to the day and reports how many
+  rows it skipped.
+
+Loading the real files reproduces the run log exactly: 4,500 evaluated,
+1,072 active, 110 shortlisted, 480 rejected on score, with the same rejection
+categories in the same proportions.
+
+The real position files taught four more things:
+
+- **`Exit_Reason` is free text too** — 48 distinct values over 185 trades:
+  *"Early Exit - Day15_TakeProfit_8pct"*, *"Earnings - NSSC reports
+  2026-02-02"*, *"Pre-Holiday Exit (term date 2025-12-25 is non-trading
+  day)"*, *"Past Due (was 2026-02-17)"*. The last two are scheduled exits
+  displaced by the calendar and have no canonical reason in the schema; they
+  map to Date Reached with the original kept.
+- **Ten `NOT NULL` columns had nulls.** `Index at Exit` was missing on 78 of
+  185 rows, the sum-deviation fields on 13, and one row was blank below `Tag`.
+  The synthetic generator always supplied every field, which made the
+  constraints look safe. Only what identifies a position is required now.
+- **Position tags do not exist in any file.** They are built at execution
+  time, so the adapter reconstructs one from index, legs, tail and initiation
+  date.
+- **Five positions were recorded twice** — same pair, same initiation date,
+  *different* termination dates, exit reasons and alpha. `AXSM_DAWN` appears
+  as both "Date Reached" (+0.49%) and "Past Due" (−0.48%); all ten rows fall
+  on 17–18 February. Whether that is a duplicate-exit bug or two genuine
+  records is not the adapter's call: it keeps both, suffixed by exit date,
+  and reports them. A silent overwrite would have lost half of a
+  contradiction — which is exactly what the first version did, dropping 185
+  rows to 180 without saying so.
 
 **Orders, fills, stages and events come from the log**, which needs a parser
 written against a real sample. `LogParser` is the interface; until it is
@@ -850,3 +895,70 @@ hypotheses, correct for multiple testing, or ask whether the agent looked at
 the right things. Those are the investigator's problems and they are harder.
 This is the component the investigator would need first.
 
+### The test fixtures come from real files
+
+`tests/fixtures/v9/` holds six small Excel files sampled out of a real
+archived day, and the adapter's tests run against those rather than against
+anything generated. The reason is the same one that made the tools fail on
+first contact with real data: the properties worth testing are ones a
+generator would not invent — `Tag` repeated across stages, free-text reasons
+carrying tickers and magnitudes, a cumulative archive spanning ten months,
+five positions recorded twice with contradictory exits, one blank row.
+
+```bash
+make fixtures DAY=~/Desktop/V9/archive/2026-09-08
+```
+
+`make_fixtures.py` samples those cases out of a real archive so the fixtures
+stay small enough to commit while still exhibiting every case the tests name.
+Run it once; regenerate only if the live system's file formats change.
+
+## What real data broke
+
+The first three questions asked against real loaded data found three faults
+that months of synthetic testing could not, because each depended on a shape
+the generator never produced.
+
+**The date window came from runs alone.** `blotter_date_range` read
+`workflow_runs`, and the generator wrote a run for every day it also opened
+positions — so runs and positions always spanned the same period. The adapter
+loads one run per archived day but `Completed_Trades.xlsx` carries months of
+history. *"How have closed positions performed?"* returned nothing against 184
+real closed trades, and the agent correctly reported what it was shown: that
+the blotter held a single day. The window now spans positions as well as runs.
+
+**Rejection counts covered the page, not the window.** `explain_rejection`
+tallied reasons across the rows it returned. On a day with thousands of
+rejections that is the breakdown of the first fifty — and with no `ORDER BY`
+on pair, insertion order on a bulk-loaded file is alphabetical, so those fifty
+were one alphabetical block of one sector. The agent reported the proportions
+as the day's and flagged the result as truncated; it was right to flag it and
+wrong about what the flag meant. Counts now aggregate over the whole window
+before the rows are limited, and the ordering is deterministic.
+
+**No tool exposed the pipeline stage.** *"Which pairs reached the shortlist
+but weren't traded?"* was unanswerable: `stage` arrived with the adapter and
+nothing surfaced it, so the agent reached for `explain_rejection` and answered
+a different question confidently. `query_blotter` gained a `candidates`
+entity that carries the stage each pair reached and whether a position was
+opened on it that day.
+
+**And one the CI would have found before Postgres did.** PostgreSQL returns
+NUMERIC columns as `decimal.Decimal`; SQLite returns them as `float`. The
+numeric-fidelity check walks tool results for the figures an answer may cite,
+and skipped Decimals — so on Postgres every stated number would have looked
+unsupported and the check would have reported "no tools ran" while the answer
+was perfectly sourced. Saved traces would also have serialised decimals as
+quoted strings, leaving a reloaded trace unable to support the audit the live
+one passed. `ToolResult` now normalises numerics at construction, copying
+rather than mutating the database layer's payload, so both backends produce
+identical evidence.
+
+The pattern in all four: the environment the system was built against was
+internally consistent in ways the real one is not, and every component that
+quietly relied on that consistency failed the first time it met something
+else — real files, or a second database engine.
+
+## Next
+
+Real paper-account data, and a production version at Faraday.

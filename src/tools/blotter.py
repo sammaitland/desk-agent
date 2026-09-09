@@ -30,6 +30,8 @@ def query_blotter(
     pair: str | None = None,
     index: str | None = None,
     status: str | None = None,
+    stage: str | None = None,
+    traded: bool | int | None = None,
     limit: int = 50,
 ) -> ToolResult:
     """Look up raw records from the trade blotter.
@@ -39,9 +41,14 @@ def query_blotter(
     a more specific tool.
 
     entity:
-      'positions' — pair trades, open and closed
-      'orders'    — ticker-level orders sent to the broker
-      'runs'      — daily execution runs and their outcome
+      'positions'  — pair trades, open and closed
+      'orders'     — ticker-level orders sent to the broker
+      'runs'       — daily execution runs and their outcome
+      'candidates' — pairs evaluated on a run, with the stage each reached:
+                     prefilter -> longlist -> shortlist. `traded` is 1 when a
+                     position was opened on that pair that day, 0 when it was
+                     not — so "shortlisted but not traded" is
+                     entity='candidates', stage='shortlist', traded=0.
 
     Dates are ISO (YYYY-MM-DD) and inclusive; omitting them covers the whole
     blotter. `ticker` matches either leg of a position. `status` accepts
@@ -86,6 +93,37 @@ def query_blotter(
             where.append("o.status = :status")
             params["status"] = status
         order = "ORDER BY o.placed_at DESC"
+
+    elif entity == "candidates":
+        # LEFT JOIN to positions on pair and day: a shortlisted pair with no
+        # position that day was selected and then not traded, which is the
+        # gap between "the model liked it" and "the book took it".
+        sql = """SELECT e.evaluated_at, e.pair, e.co1, e.co2, e.idx, e.tail, e.stage,
+                        e.sum_dev_bucket, e.composite_score, e.weighted_score,
+                        e.evaluation_result, e.rejection_reason, e.rejection_detail,
+                        CASE WHEN p.tag IS NULL THEN 0 ELSE 1 END AS traded,
+                        p.tag AS position_tag
+                 FROM pair_evaluations e
+                 LEFT JOIN positions p
+                        ON p.pair = e.pair
+                       AND p.trade_initiation_date = SUBSTR(e.evaluated_at, 1, 10)
+                 WHERE """ + date_clause("evaluated_at", "e")
+        if stage:
+            where.append("e.stage = :stage")
+            params["stage"] = stage
+        if traded is not None:
+            where.append("(CASE WHEN p.tag IS NULL THEN 0 ELSE 1 END) = :traded")
+            params["traded"] = int(traded)
+        if pair:
+            where.append("e.pair = :pair")
+            params["pair"] = pair
+        if index:
+            where.append("e.idx = :index")
+            params["index"] = index
+        if ticker:
+            where.append("(e.co1 = :ticker OR e.co2 = :ticker)")
+            params["ticker"] = ticker
+        order = "ORDER BY e.evaluated_at DESC, e.composite_score DESC"
 
     elif entity == "runs":
         sql = """SELECT r.run_id, r.run_date, r.outcome, s.position_count,
@@ -237,7 +275,7 @@ def explain_rejection(
         FROM pair_evaluations
         WHERE {' AND '.join(where)}
           AND (primary_result = 'Fail' OR evaluation_result = 'Rejected')
-        ORDER BY evaluated_at DESC LIMIT :limit"""
+        ORDER BY evaluated_at DESC, pair LIMIT :limit"""
 
     rows = rows_to_dicts(conn.execute(text(sql), params))
     if not rows:
@@ -245,19 +283,35 @@ def explain_rejection(
                      "approved, or not evaluated in this window.",
                      window=[start, end], filters={"pair": pair, "ticker": ticker})
 
-    tally: dict[str, int] = {}
-    for row in rows:
-        reason = row["primary_fail_reason"] or row["rejection_reason"] or "unknown"
-        tally[reason] = tally.get(reason, 0) + 1
-    top = max(tally, key=tally.get)
+    # Counts come from the WHOLE window, not from the rows returned. An
+    # earlier version tallied the limited result set, so on a day with 3,428
+    # rejections the model was handed the reason breakdown of the first 50
+    # rows — which, with no ORDER BY on pair, was one alphabetical block of a
+    # single sector. It reported those proportions as the day's, and was
+    # right to flag the result as truncated but wrong about what it meant.
+    where_sql = " AND ".join(where)
+    totals = conn.execute(text(f"""
+        SELECT COALESCE(primary_fail_reason, rejection_reason, 'unknown') AS reason,
+               COUNT(*) AS n
+        FROM pair_evaluations
+        WHERE {where_sql}
+          AND (primary_result = 'Fail' OR evaluation_result = 'Rejected')
+        GROUP BY 1 ORDER BY n DESC"""), params).all()
+    tally = {r[0]: r[1] for r in totals}
+    total_rejections = sum(tally.values())
+    top = next(iter(tally)) if tally else "unknown"
+    truncated = len(rows) < total_rejections
 
     return ToolResult(
         data=rows,
         provenance={
-            "rows": len(rows), "window": [start, end],
-            "filters": {"pair": pair, "ticker": ticker},
-            "reason_counts": tally, "truncated": len(rows) == params["limit"],
+            "rows": len(rows), "total_rejections": total_rejections,
+            "window": [start, end], "filters": {"pair": pair, "ticker": ticker},
+            "reason_counts": tally, "truncated": truncated,
+            "counts_cover": "the whole window, not just the rows returned",
         },
-        summary=(f"{len(rows)} rejections between {start} and {end}; "
-                 f"most common reason: {top} ({tally[top]})."),
+        summary=(f"{total_rejections} rejections between {start} and {end}; "
+                 f"most common reason: {top} ({tally[top]}). "
+                 + (f"Showing {len(rows)} rows; the reason counts cover all "
+                    f"{total_rejections}." if truncated else "")),
     )

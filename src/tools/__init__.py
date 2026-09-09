@@ -60,8 +60,13 @@ TOOL_SCHEMAS = [
             "type": "object",
             "properties": {
                 "entity": {
-                    "type": "string", "enum": ["positions", "orders", "runs"],
-                    "description": "positions = pair trades; orders = ticker-level broker orders; runs = daily execution runs.",
+                    "type": "string", "enum": ["positions", "orders", "runs", "candidates"],
+                    "description": (
+                        "positions = pair trades; orders = ticker-level broker orders; "
+                        "runs = daily execution runs; candidates = pairs evaluated on a run, "
+                        "carrying the stage each reached (prefilter -> longlist -> shortlist) "
+                        "and whether a position was opened on it that day."
+                    ),
                 },
                 **_DATE_WINDOW,
                 "ticker": {"type": "string", "description": "Single ticker. For positions, matches either leg."},
@@ -69,6 +74,12 @@ TOOL_SCHEMAS = [
                 "index": {"type": "string", "description": "Sector index, e.g. VGT, VFH, VIS, VHT, VCR."},
                 "status": {"type": "string",
                            "description": "positions: open|closed. orders: Filled|Partial|Failed."},
+                "stage": {"type": "string", "enum": ["prefilter", "longlist", "shortlist", "rejected"],
+                          "description": "candidates only: how far the pair got through the pipeline."},
+                "traded": {"type": "boolean",
+                           "description": "candidates only: true = a position was opened on this pair "
+                                          "that day; false = it was not. Shortlisted-but-not-traded is "
+                                          "stage='shortlist', traded=false."},
                 "limit": {"type": "integer", "description": "Max rows, default 50."},
             },
             "required": ["entity"],

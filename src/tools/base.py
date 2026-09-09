@@ -22,36 +22,46 @@ from sqlalchemy.engine import Connection
 MAX_ROWS = 500  # hard cap: keeps tool results inside a sane context budget
 
 
-def _normalise_numbers(value: Any) -> Any:
-    """Give analytical tool outputs the same numeric types on both databases.
+def _normalise(value):
+    """Recursively convert Decimal to float, copying rather than mutating.
 
-    PostgreSQL returns Decimal for NUMERIC expressions; SQLite returns float.
-    Convert at the result boundary, after database arithmetic, so consumers
-    and JSON traces receive numbers consistently. These are approximate
-    analytical metrics, not an exact-decimal accounting ledger.
+    Booleans are left alone — they are ints in Python and would otherwise be
+    indistinguishable from 0 and 1 downstream.
     """
     if isinstance(value, Decimal):
         return float(value)
     if isinstance(value, dict):
-        return {key: _normalise_numbers(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_normalise_numbers(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_normalise_numbers(item) for item in value)
+        return {k: _normalise(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_normalise(v) for v in value]
     return value
 
 
 @dataclass
 class ToolResult:
-    """Uniform return type for every tool."""
+    """Uniform return type for every tool.
+
+    Numeric values are normalised at construction: PostgreSQL returns NUMERIC
+    columns as `decimal.Decimal`, SQLite returns them as `float`, and the same
+    query would otherwise produce differently-typed evidence on the two
+    backends the system supports. Two things break when it does. The
+    numeric-fidelity check walks tool results for the figures an answer may
+    cite, and skipped Decimals entirely — so on Postgres every stated number
+    looked unsupported and the check reported "no tools ran". And saved traces
+    serialise with `default=str`, so decimals became quoted strings and a
+    reloaded trace could not support the audit the live one passed.
+
+    Coercion is a copy: the payload handed in by the database layer is never
+    mutated.
+    """
 
     data: Any
     provenance: dict[str, Any] = field(default_factory=dict)
     summary: str = ""
 
     def __post_init__(self) -> None:
-        self.data = _normalise_numbers(self.data)
-        self.provenance = _normalise_numbers(self.provenance)
+        self.data = _normalise(self.data)
+        self.provenance = _normalise(self.provenance)
 
     def as_dict(self) -> dict[str, Any]:
         return {"summary": self.summary, "provenance": self.provenance, "data": self.data}
@@ -71,8 +81,23 @@ def rows_to_dicts(result) -> list[dict[str, Any]]:
 
 
 def blotter_date_range(conn: Connection) -> tuple[str | None, str | None]:
-    """Earliest and latest run dates held in the blotter."""
-    row = conn.execute(text("SELECT MIN(run_date), MAX(run_date) FROM workflow_runs")).one()
+    """Earliest and latest dates the blotter holds anything for.
+
+    Spans runs AND positions. The synthetic generator wrote a run for every
+    day it also opened positions, so taking the range from workflow_runs
+    alone was always right. Real data breaks that: the adapter loads one run
+    per archived day but Completed_Trades.xlsx carries months of history, so
+    a single archived day gave a one-day window and every historical position
+    fell outside it. "How have closed positions performed?" returned nothing
+    against 184 real closed trades.
+    """
+    row = conn.execute(text("""
+        SELECT MIN(d), MAX(d) FROM (
+            SELECT MIN(run_date) AS d FROM workflow_runs
+            UNION ALL SELECT MAX(run_date) FROM workflow_runs
+            UNION ALL SELECT MIN(trade_initiation_date) FROM positions
+            UNION ALL SELECT MAX(COALESCE(termination_date, trade_initiation_date)) FROM positions
+        ) WHERE d IS NOT NULL""")).one()
     return row[0], row[1]
 
 

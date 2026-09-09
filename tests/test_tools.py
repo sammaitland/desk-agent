@@ -148,7 +148,111 @@ def test_explain_rejection_only_returns_failures(conn):
 def test_explain_rejection_tallies_reasons(conn):
     result = dispatch("explain_rejection", {"limit": 30}, conn)
     tally = result.provenance["reason_counts"]
-    assert tally and sum(tally.values()) == len(result.data)
+    # Counts cover the window, not the page — see
+    # test_rejection_counts_cover_the_window_not_the_page.
+    assert tally and sum(tally.values()) == result.provenance["total_rejections"]
+    assert sum(tally.values()) >= len(result.data)
+
+
+# --- date window spans positions, not just runs ---------------------------
+
+def test_window_covers_positions_outside_the_run_range(tmp_path):
+    """Real data loads one run per archived day but months of position
+    history. Taking the window from workflow_runs alone gave a one-day range
+    and hid 184 closed positions: "how have closed positions performed?"
+    returned nothing against a full book.
+
+    Built directly rather than by deleting from a generated blotter, because
+    this is exactly the shape the adapter produces: a single run row, and
+    positions predating it by months.
+    """
+    from src.db import create_schema, get_engine
+    from src.tools.base import blotter_date_range
+
+    engine = get_engine(f"sqlite:///{tmp_path / 'narrow.db'}")
+    create_schema(engine)
+    with engine.connect() as c:
+        c.execute(text("""INSERT INTO instruments (ticker, name, idx, is_active)
+                          VALUES ('AAPL','AAPL','VGT',1), ('MSFT','MSFT','VGT',1)"""))
+        c.execute(text("""INSERT INTO workflow_runs (run_id, run_date, started_at, outcome)
+                          VALUES ('r1', '2026-09-08', '2026-09-08 14:30:00', 'completed')"""))
+        c.execute(text("""INSERT INTO positions
+            (tag, pair, co1, co2, idx, tail, status, trade_initiation_date,
+             termination_date, final_alpha_return_pct, holding_days, total_notional)
+            VALUES ('VGT_AAPL_MSFT_L_20251120_001','AAPL_MSFT','AAPL','MSFT','VGT','L',
+                    'closed','2025-11-20','2025-12-11', 1.23, 21, 3300)"""))
+        c.commit()
+
+        first, last = blotter_date_range(c)
+        assert first == "2025-11-20", f"window starts {first}, not at the earliest position"
+        assert last >= "2026-09-08"
+        result = dispatch("alpha_attribution", {"group_by": "idx"}, c)
+        assert result.data, "a closed position months before the only run must be visible"
+        assert result.data["breakdown"][0]["trades"] == 1
+
+
+# --- rejection counts cover the window ------------------------------------
+
+def test_rejection_counts_cover_the_window_not_the_page(conn):
+    """An earlier version tallied reasons across the LIMITed rows, so a day
+    with thousands of rejections reported the breakdown of the first 50 —
+    one alphabetical block of one sector — as the day's proportions."""
+    small = dispatch("explain_rejection", {"limit": 5}, conn)
+    large = dispatch("explain_rejection", {"limit": 500}, conn)
+    assert small.provenance["reason_counts"] == large.provenance["reason_counts"]
+    assert small.provenance["total_rejections"] == large.provenance["total_rejections"]
+    assert len(small.data) == 5 and small.provenance["truncated"] is True
+    assert str(small.provenance["total_rejections"]) in small.summary
+
+
+def test_rejection_rows_are_deterministic(conn):
+    """No ORDER BY on pair meant the limited page was insertion order, which
+    for a bulk-loaded file is alphabetical — and looked like a real pattern."""
+    a = dispatch("explain_rejection", {"limit": 10}, conn).data
+    b = dispatch("explain_rejection", {"limit": 10}, conn).data
+    assert [r["pair"] for r in a] == [r["pair"] for r in b]
+
+
+# --- candidates entity -----------------------------------------------------
+
+def test_candidates_entity_exposes_stage_and_traded(conn):
+    """"Which pairs reached the shortlist but weren't traded?" had no tool
+    that could answer it — stage was added by the adapter and nothing
+    surfaced it, so the agent answered a different question confidently."""
+    result = dispatch("query_blotter", {"entity": "candidates", "limit": 5}, conn)
+    assert result.data
+    for row in result.data:
+        assert "stage" in row and "traded" in row and row["traded"] in (0, 1)
+
+
+def test_candidates_traded_flag_matches_positions(conn):
+    """traded=1 must mean a position exists on that pair and day."""
+    rows = dispatch("query_blotter", {"entity": "candidates", "limit": 200}, conn).data
+    for row in rows:
+        expected = conn.execute(text("""
+            SELECT COUNT(*) FROM positions
+            WHERE pair = :p AND trade_initiation_date = :d"""),
+            {"p": row["pair"], "d": row["evaluated_at"][:10]}).scalar()
+        assert row["traded"] == (1 if expected else 0), row["pair"]
+
+
+def test_candidates_filters_by_stage_and_traded(conn):
+    conn.execute(text("UPDATE pair_evaluations SET stage = 'shortlist' WHERE eval_id IN "
+                      "(SELECT eval_id FROM pair_evaluations LIMIT 5)"))
+    conn.commit()
+    rows = dispatch("query_blotter",
+                    {"entity": "candidates", "stage": "shortlist", "traded": False},
+                    conn).data
+    assert rows and all(r["stage"] == "shortlist" and r["traded"] == 0 for r in rows)
+
+
+def test_candidates_is_registered_with_the_agent():
+    from src.tools import TOOL_SCHEMAS
+
+    schema = next(s for s in TOOL_SCHEMAS if s["name"] == "query_blotter")
+    props = schema["input_schema"]["properties"]
+    assert "candidates" in props["entity"]["enum"]
+    assert "stage" in props and "traded" in props
 
 
 # --- fill aggregation ------------------------------------------------------

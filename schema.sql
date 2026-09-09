@@ -91,7 +91,10 @@ CREATE TABLE pair_evaluations (
     co2_trending                INTEGER,
     same_direction_result       TEXT,
     nominal_direction_result    TEXT,
-    primary_result              TEXT NOT NULL,
+    -- Nullable: only the longlist reports a Pass/Fail primary result. The
+    -- prefilter reports Active 0/1 (-> evaluation_result) and the rejected
+    -- archive reports neither. The synthetic generator always supplies one.
+    primary_result              TEXT,
     primary_fail_reason         TEXT,
     volume_ratio                REAL,
     rolling_intraday_vol        REAL,
@@ -112,10 +115,50 @@ CREATE TABLE pair_evaluations (
     composite_priority_score    REAL,
     evaluation_result           TEXT,
     rejection_reason            TEXT,
+    -- Added when the adapter met the real V9.3 files. The live system's
+    -- Reason is free text embedding ticker and magnitude ("Trending filter:
+    -- ASAN - Negative trending: -73.49% excess return over 12M"), so the
+    -- category and the original are kept apart. `stage` records how far a
+    -- pair got: prefilter -> longlist -> shortlist, or rejected on score.
+    -- `source_tag` is the parameters-file row index, which is what the
+    -- pre-trade files key on — position tags do not exist until execution.
+    rejection_detail            TEXT,
+    stage                       TEXT,
+    version                     TEXT,
+    source_tag                  INTEGER,
+    category1                   TEXT,
+    category2                   TEXT,
+    index_bias                  REAL,
+    alpha_cdf                   REAL,
+    earnings_result             TEXT,
+    spread_result               TEXT,
+    alpha_result                TEXT,
+    two_day_result              TEXT,
+    trend_result                TEXT,
+    score_threshold             REAL,
+    score_shortfall             REAL,
+    co1_price                   REAL,
+    co2_price                   REAL,
+    index_price                 REAL,
+    co1_beta                    REAL,
+    co2_beta                    REAL,
+    w1                          REAL,
+    w2                          REAL,
+    volume_ratio_pct            REAL,
+    intraday_vol_pct            REAL,
+    volume_dominance_pct        REAL,
+    last_hour_pct               REAL,
+    iv_percentile_pct           REAL,
     FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id)
 );
 
 
+-- Most columns are nullable because the real system's files leave them so.
+-- The synthetic generator always supplied every field, which made the
+-- constraints look safe; the first real Completed_Trades.xlsx had nulls in
+-- ten NOT NULL columns — Index at Exit missing on 78 of 185 rows, Sum_Dev
+-- fields on 13, and the whole row blank on one. Only what identifies a
+-- position is required.
 CREATE TABLE positions (
     tag                     TEXT PRIMARY KEY,
     pair                    TEXT NOT NULL,
@@ -123,21 +166,21 @@ CREATE TABLE positions (
     co2                     TEXT NOT NULL,
     idx                     TEXT NOT NULL,
     tail                    TEXT NOT NULL,
-    version                 TEXT NOT NULL,
-    quantity1               INTEGER NOT NULL,
-    quantity2               INTEGER NOT NULL,
-    w1                      REAL NOT NULL,
-    w2                      REAL NOT NULL,
-    trade_value_co1         REAL NOT NULL,
-    trade_value_co2         REAL NOT NULL,
-    total_notional          REAL NOT NULL,
-    position_multiplier     REAL NOT NULL,
-    co1_at_initiation       REAL NOT NULL,
-    co2_at_initiation       REAL NOT NULL,
-    index_at_initiation     REAL NOT NULL,
+    version                 TEXT,
+    quantity1               INTEGER,
+    quantity2               INTEGER,
+    w1                      REAL,
+    w2                      REAL,
+    trade_value_co1         REAL,
+    trade_value_co2         REAL,
+    total_notional          REAL,
+    position_multiplier     REAL,
+    co1_at_initiation       REAL,
+    co2_at_initiation       REAL,
+    index_at_initiation     REAL,
     trade_initiation_date   TEXT NOT NULL,
     entry_spread_bps        REAL,
-    sum_dev_bucket          TEXT NOT NULL,
+    sum_dev_bucket          TEXT,
     sum_deviation           REAL,
     sum_dev_percentile      REAL,
     weighted_score          REAL,
@@ -147,6 +190,19 @@ CREATE TABLE positions (
     stop_order_id           TEXT,
     status                  TEXT NOT NULL,
     exit_reason             TEXT,
+    -- The live system's Exit_Reason is free text carrying the detail:
+    -- "Early Exit - Day15_TakeProfit_8pct", "Earnings - NSSC reports
+    -- 2026-02-02", "Pre-Holiday Exit (term date 2025-12-25 is non-trading
+    -- day)". The canonical reason above is queryable; this keeps the day
+    -- number, the reporting ticker or the displaced date.
+    exit_detail             TEXT,
+    scheduled_termination_date TEXT,
+    index_bias              REAL,
+    -- Secondary-signal snapshot at entry, carried by both real position files.
+    volume_ratio            REAL,
+    rolling_intraday_vol    REAL,
+    volume_dominance        REAL,
+    iv_percentile           REAL,
     termination_date        TEXT,
     holding_days            INTEGER,
     co1_at_exit             REAL,

@@ -10,6 +10,7 @@ help:
 	@echo "mcp         start the MCP server (stdio)"
 	@echo "dashboard   start the Streamlit dashboard"
 	@echo "adapter     load archived V9.2C output (ARCHIVE=path)"
+	@echo "fixtures    rebuild adapter test fixtures (DAY=archive/YYYY-MM-DD)"
 	@echo "docker-test run the suite against Postgres in Docker"
 
 install:
@@ -41,6 +42,9 @@ dashboard:
 
 adapter:
 	python run_adapter.py $(ARCHIVE)
+
+fixtures:
+	python make_fixtures.py $(DAY)
 
 docker-test:
 	docker compose run --rm test
