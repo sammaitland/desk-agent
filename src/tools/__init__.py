@@ -16,12 +16,14 @@ from src.tools.analytics import alpha_attribution, detect_anomalies, execution_q
 from src.tools.base import ToolResult
 from src.tools.blotter import explain_position, explain_rejection, query_blotter
 from src.tools.charts import make_chart
+from src.tools.records import query_records
 from src.rag.tool import search_documentation
 
 # Tools taking a database connection as their first argument. make_chart does
 # not touch the blotter, so the loop passes it through differently.
 DB_TOOLS: dict[str, Callable[..., ToolResult]] = {
     "query_blotter": query_blotter,
+    "query_records": query_records,
     "explain_position": explain_position,
     "explain_rejection": explain_rejection,
     "execution_quality": execution_quality,
@@ -48,9 +50,38 @@ _DATE_WINDOW = {
 
 TOOL_SCHEMAS = [
     {
+        "name": "query_records",
+        "description": (
+            "Retrieve authoritative risk checks (Pass AND Fail), or stop orders with a trigger timestamp. "
+            "Use risk_checks for what a check recorded, including successful position_size checks; "
+            "explain_rejection only returns rejections. Use stop_orders for stop counts and times, "
+            "not position entry dates or orphan-event counts. Dates filter checked_at for checks and "
+            "triggered_at for stops. Count covers ALL matches; records are a limited page. "
+            "Use record_id to distinguish multiple checks for the same subject and day."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity": {"type": "string", "enum": ["risk_checks", "stop_orders"]},
+                **_DATE_WINDOW,
+                "record_id": {"type": "string", "description": "Exact check_id or stop_order_tag."},
+                "subject": {"type": "string", "description": "risk_checks only: pair or other checked subject."},
+                "check_name": {"type": "string", "description": "risk_checks only, e.g. position_size."},
+                "result": {"type": "string", "enum": ["Pass", "Fail"], "description": "risk_checks only."},
+                "tag": {"type": "string", "description": "stop_orders only: exact position tag."},
+                "status": {"type": "string", "enum": ["active", "triggered", "cancelled"],
+                           "description": "stop_orders only; rows without triggered_at are excluded."},
+                "limit": {"type": "integer", "description": "Maximum records; count is not limited."},
+            },
+            "required": ["entity"],
+        },
+    },
+    {
         "name": "query_blotter",
         "description": (
             "Look up raw records from the trade blotter: positions, orders or daily runs. "
+            "Position dates default to trade_initiation_date (entries); use date_basis=termination_date "
+            "for exits. Current closed status alone does not select exits in the window. "
             "This is the general-purpose lookup — use it to find what exists (for example to "
             "obtain a position tag or order id) before drilling in with a more specific tool. "
             "Do not use it for execution cost analysis, rejection reasons or alpha breakdowns; "
@@ -74,13 +105,17 @@ TOOL_SCHEMAS = [
                 "index": {"type": "string", "description": "Sector index, e.g. VGT, VFH, VIS, VHT, VCR."},
                 "status": {"type": "string",
                            "description": "positions: open|closed. orders: Filled|Partial|Failed."},
+                "fallback_reason": {"type": "string",
+                                    "description": "orders only: exact fallback reason, e.g. timeout."},
+                "date_basis": {"type": "string", "enum": ["trade_initiation_date", "termination_date"],
+                               "description": "positions only: entry date (default) or exit date."},
                 "stage": {"type": "string", "enum": ["prefilter", "longlist", "shortlist", "rejected"],
                           "description": "candidates only: how far the pair got through the pipeline."},
                 "traded": {"type": "boolean",
                            "description": "candidates only: true = a position was opened on this pair "
                                           "that day; false = it was not. Shortlisted-but-not-traded is "
                                           "stage='shortlist', traded=false."},
-                "limit": {"type": "integer", "description": "Max rows, default 50."},
+                "limit": {"type": "integer", "description": "Max rows, default 50; provenance.total_rows is not limited."},
             },
             "required": ["entity"],
         },
@@ -153,6 +188,7 @@ TOOL_SCHEMAS = [
     {
         "name": "alpha_attribution",
         "description": (
+            "Dates select entry cohorts by default; date_basis=termination_date selects exits. "
             "Break down realised alpha across the book by sector index, CDF bucket, tail, exit "
             "reason or month. Returns trade counts, mean and total alpha, win rate and average "
             "holding period per group. Alpha is index-relative and market-neutral "
@@ -163,6 +199,8 @@ TOOL_SCHEMAS = [
             "type": "object",
             "properties": {
                 **_DATE_WINDOW,
+                "date_basis": {"type": "string", "enum": ["trade_initiation_date", "termination_date"],
+                               "description": "Entry date by default; choose termination_date for exits."},
                 "group_by": {"type": "string",
                              "enum": ["idx", "sum_dev_bucket", "tail", "exit_reason", "month"],
                              "description": "Attribution dimension. Default idx (sector index)."},
@@ -188,7 +226,9 @@ TOOL_SCHEMAS = [
                 **_DATE_WINDOW,
                 "severity": {"type": "string", "enum": ["info", "warning", "halt"],
                              "description": "Restrict by severity. 'halt' means trading stopped."},
-                "event_type": {"type": "string", "description": "Restrict to one event type."},
+                "event_type": {"type": "string", "description": "Canonical event label, e.g. partial_fill, "
+                    "order_timeout, orphan_detection. Unknown labels return an error with alternatives. "
+                    "Use query_records(entity=stop_orders) for stop triggers; orphan events are distinct."},
                 "limit": {"type": "integer", "description": "Max events, default 50."},
             },
             "required": [],

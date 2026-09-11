@@ -150,9 +150,9 @@ def _spread_bps(rng, price, stressed=False):
 
 
 class Generator:
-    def __init__(self, seed: int, days: int):
+    def __init__(self, seed: int, days: int, as_of: date | None = None):
         self.rng = random.Random(seed)
-        self.anchor = date.today()
+        self.anchor = as_of or date.today()
         self.calendar = _trading_days(self.anchor - timedelta(days=1), days)
         self.instruments, self.runs, self.stages = [], [], []
         self.snapshots, self.evals, self.positions = [], [], []
@@ -902,11 +902,13 @@ def main() -> None:
     ap.add_argument("--days", type=int, default=120)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--db-url", default=None)
+    ap.add_argument("--as-of", type=date.fromisoformat, default=None,
+                    help="Anchor date YYYY-MM-DD; generated days end before this date. IDs still use UUIDs.")
     args = ap.parse_args()
 
     engine = get_engine(args.db_url)
     create_schema(engine)
-    gen = Generator(seed=args.seed, days=args.days)
+    gen = Generator(seed=args.seed, days=args.days, as_of=args.as_of)
     gen.run()
     gen.write(engine)
 

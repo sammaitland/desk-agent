@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
+from datetime import date
 from typing import Any
 
 from sqlalchemy import text
@@ -93,12 +94,27 @@ def blotter_date_range(conn: Connection) -> tuple[str | None, str | None]:
     """
     row = conn.execute(text("""
         SELECT MIN(d), MAX(d) FROM (
-            SELECT MIN(run_date) AS d FROM workflow_runs
-            UNION ALL SELECT MAX(run_date) FROM workflow_runs
-            UNION ALL SELECT MIN(trade_initiation_date) FROM positions
-            UNION ALL SELECT MAX(COALESCE(termination_date, trade_initiation_date)) FROM positions
+            SELECT MIN(SUBSTR(run_date, 1, 10)) AS d FROM workflow_runs
+            UNION ALL SELECT MAX(SUBSTR(run_date, 1, 10)) FROM workflow_runs
+            UNION ALL SELECT MIN(SUBSTR(trade_initiation_date, 1, 10)) FROM positions
+            UNION ALL SELECT MAX(SUBSTR(COALESCE(termination_date, trade_initiation_date), 1, 10)) FROM positions
         ) WHERE d IS NOT NULL""")).one()
     return row[0], row[1]
+
+
+def invalid_date_window(start_date, end_date) -> str | None:
+    """Validate optional ISO day filters before treating an empty query as zero."""
+    for value in (start_date, end_date):
+        if value is None:
+            continue
+        try:
+            if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
+                return "dates must be ISO YYYY-MM-DD"
+        except ValueError:
+            return "dates must be ISO YYYY-MM-DD"
+    if start_date and end_date and start_date > end_date:
+        return "start_date must not follow end_date"
+    return None
 
 
 def resolve_window(conn: Connection, start_date: str | None, end_date: str | None) -> tuple[str, str]:

@@ -25,7 +25,7 @@ from pathlib import Path
 
 from src import env  # noqa: F401
 from src.agent.loop import MODEL
-from src.critic.benchmark import build_cases, provenance, run_atomic, run_benchmark
+from src.critic.benchmark import build_cases, database_digest, provenance, run_atomic, run_benchmark
 from src.db import get_engine
 
 
@@ -34,16 +34,25 @@ def main() -> int:
     parser.add_argument("--atomic", action="store_true", help="verifier only, bypassing extraction")
     parser.add_argument("--save", action="store_true")
     parser.add_argument("--db-url", default=None)
+    parser.add_argument("--preflight", action="store_true", help="print provenance and exit without model calls")
+    parser.add_argument("--expect-db", default=None, help="require this content fingerprint before running")
     args = parser.parse_args()
 
     engine = get_engine(args.db_url)
     with engine.connect() as conn:
         cases = build_cases(conn)
         prov = provenance(conn, cases, MODEL)
+        if args.expect_db and args.expect_db != prov["database"]["fingerprint"]:
+            parser.error("database content fingerprint differs from --expect-db; no model calls made")
+        if args.preflight:
+            print(json.dumps(prov, indent=2, default=str))
+            return 0
         print(f"\nCritic benchmark — {'atomic' if args.atomic else 'end-to-end'}")
         print(f"case set {prov['case_set_hash']}   db {prov['database']['fingerprint']}   "
               f"verifier prompt {prov['verifier_prompt_hash']}\n")
         summary = (run_atomic if args.atomic else run_benchmark)(conn, cases=cases)
+        final_digest, _ = database_digest(conn)
+        database_unchanged = final_digest == prov["database"]["fingerprint"]
     print(summary.render())
 
     if args.save:
@@ -51,34 +60,15 @@ def main() -> int:
         out.mkdir(exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         path = out / f"critic_{summary.mode}_{stamp}.json"
-        path.write_text(json.dumps({
-            "mode": summary.mode,
-            "provenance": prov,
-            "metrics": {
-                "extraction_coverage": summary.extraction_coverage,
-                "recall": summary.recall, "precision": summary.precision,
-                "restraint": summary.restraint,
-                "caught": summary.total("caught"), "confirmed": summary.total("confirmed"),
-                "restrained": summary.total("restrained"), "cautions": summary.total("caution"),
-                "unresolved": summary.total("unresolved"),
-                "false_alarms": summary.total("false_alarm"),
-                "false_verifications": summary.total("false_verify"),
-                "overreach": summary.total("overreach"),
-            },
-            "cases": [{
-                "name": r.case.name, "kind": r.case.kind, "passed": r.passed,
-                "outcome": r.outcome, "ambiguous": r.ambiguous_claims,
-                "unmatched": r.unmatched_flags,
-                "targets": [{"id": t.id, "span": t.span, "expected": t.expected,
-                             "claim": t.claim, "note": t.note} for t in r.case.targets],
-                "critique": r.critique.as_dict() if r.critique else None,
-            } for r in summary.results],
-        }, indent=2, default=str))
+        payload = {**summary.as_dict(), "provenance": prov, "database_unchanged": database_unchanged}
+        payload["gate_passed"] = summary.gate_passed and database_unchanged
+        path.write_text(json.dumps(payload, indent=2, default=str))
         print(f"saved {path}  (verifier traces in traces/critic/)")
 
-    errors = sum(r.errors for r in summary.results)
-    incomplete = sum(1 for r in summary.results if r.critique and not r.critique.complete)
-    return 0 if errors == 0 and incomplete == 0 and summary.recall >= 0.6 else 1
+    if not database_unchanged:
+        print("FAIL: database contents changed during the run; comparison is invalid.")
+    return 0 if summary.gate_passed and database_unchanged else 1
+
 
 
 if __name__ == "__main__":
