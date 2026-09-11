@@ -105,6 +105,8 @@ TOOL_SCHEMAS = [
                 "index": {"type": "string", "description": "Sector index, e.g. VGT, VFH, VIS, VHT, VCR."},
                 "status": {"type": "string",
                            "description": "positions: open|closed. orders: Filled|Partial|Failed."},
+                "fallback_reason": {"type": "string",
+                                    "description": "orders only: exact fallback reason, e.g. timeout."},
                 "date_basis": {"type": "string", "enum": ["trade_initiation_date", "termination_date"],
                                "description": "positions only: entry date (default) or exit date."},
                 "stage": {"type": "string", "enum": ["prefilter", "longlist", "shortlist", "rejected"],
@@ -113,7 +115,7 @@ TOOL_SCHEMAS = [
                            "description": "candidates only: true = a position was opened on this pair "
                                           "that day; false = it was not. Shortlisted-but-not-traded is "
                                           "stage='shortlist', traded=false."},
-                "limit": {"type": "integer", "description": "Max rows, default 50."},
+                "limit": {"type": "integer", "description": "Max rows, default 50; provenance.total_rows is not limited."},
             },
             "required": ["entity"],
         },

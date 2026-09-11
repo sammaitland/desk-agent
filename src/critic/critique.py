@@ -60,7 +60,7 @@ from sqlalchemy.engine import Connection
 from src.agent.loop import MODEL, _blotter_context, run_agent
 from src.agent.trace import TRACE_DIR, Trace
 from src.critic.prompts import EXTRACTOR_PROMPT, verifier_question, verifier_system
-from src.critic.evidence import evidence_is_grounded, parse_assessment, requires_market_evidence
+from src.critic.evidence import evidence_is_grounded, parse_assessment, requires_market_evidence, validate_evidence
 
 CLAIM_TYPES = ("figure", "causal", "comparative", "inferential")
 VERDICTS = ("verified", "contradicted", "undetermined", "skipped")
@@ -116,6 +116,7 @@ class Verdict:
     trace_path: str | None = None
     tokens: int = 0
     references: list[dict] = field(default_factory=list)
+    citation_warnings: list[str] = field(default_factory=list)
     relation: str | None = None
     assessment_error: str | None = None
     model: str | None = None
@@ -247,6 +248,8 @@ class Critique:
                 lines.append(f"      {v.evidence}")
             if v.assessment_error:
                 lines.append(f"      assessment failed: {v.assessment_error}")
+            for warning in v.citation_warnings:
+                lines.append(f"      citation warning: {warning}")
         return "\n".join(lines)
 
 
@@ -325,6 +328,8 @@ def verify_claim(claim: Claim, question: str, conn: Connection, client=None,
     assessment, error = parse_assessment(trace.answer)
     proposed = assessment.get("verdict")
     evidence = assessment.get("evidence", "")
+    references = assessment.get("references", [])
+    citation_warnings: list[str] = []
     verdict, downgraded = proposed or "undetermined", None
     if trace.error or trace.stop_reason != "end_turn":
         error = trace.error or f"verifier stopped with {trace.stop_reason}"
@@ -335,8 +340,8 @@ def verify_claim(claim: Claim, question: str, conn: Connection, client=None,
             verdict = "undetermined"
             downgraded = "available tools cannot establish or exclude this market cause"
         else:
-            ok, why = evidence_is_grounded(assessment, trace)
-            if not ok:
+            references, citation_warnings, why = validate_evidence(assessment, trace)
+            if why:
                 downgraded = f"{proposed} without grounded evidence — {why}"
                 error = why
                 verdict = "undetermined"
@@ -346,7 +351,8 @@ def verify_claim(claim: Claim, question: str, conn: Connection, client=None,
         claim=claim, verdict=verdict, evidence=evidence, proposed=proposed,
         tool_sequence=trace.tool_sequence, downgraded=downgraded,
         trace_run_id=trace.run_id, trace_path=str(path), tokens=trace.processed_tokens,
-        references=assessment.get("references", []), relation=assessment.get("relation"),
+        references=references, citation_warnings=citation_warnings,
+        relation=assessment.get("relation"),
         assessment_error=error, model=trace.model,
         usage={"input": trace.input_tokens, "output": trace.output_tokens,
                "cache_read": trace.cache_read_tokens, "cache_write": trace.cache_write_tokens},

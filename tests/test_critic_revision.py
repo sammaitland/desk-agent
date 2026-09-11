@@ -11,7 +11,7 @@ from src.agent.scripted import ScriptedClient, final_turn, tool_turn
 from src.agent.trace import Trace
 from src.critic.benchmark import BenchCase, BenchSummary, Target, database_digest, score_atomic
 from src.critic.critique import Claim, Verdict, verify_claim
-from src.critic.evidence import SCOPE_KEYS, evidence_is_grounded, parse_assessment
+from src.critic.evidence import SCOPE_KEYS, evidence_is_grounded, parse_assessment, validate_evidence
 from src.db import create_schema, get_engine
 from src.generate_blotter import Generator
 from src.tools import dispatch
@@ -54,11 +54,13 @@ def test_other_call_cannot_lend_a_number_to_a_reference():
     assert not evidence_is_grounded(assessment(t, "/data/alpha", 7.89), t)[0]
 
 
-def test_reference_scope_cannot_relabel_entry_cohort_as_exits():
+def test_reference_scope_is_derived_not_trusted_from_model():
     t = trace_for({"count": 1}, {"population": "positions", "date_basis": "trade_initiation_date"})
     a = assessment(t, "/data/count", 1)
     a["references"][0]["scope"]["date_basis"] = "termination_date"
-    assert not evidence_is_grounded(a, t)[0]
+    refs, warnings, error = validate_evidence(a, t)
+    assert not error and not warnings
+    assert refs[0]["scope"]["date_basis"] == "trade_initiation_date"
 
 
 def test_aggregate_cannot_use_a_date_or_row_quantity_as_a_count():
@@ -168,11 +170,13 @@ def test_atomic_precision_retains_overreach_and_trace_metadata():
     targets = [Target("f", (0, 1), "contradicted", "f"), Target("u", (2, 3), "undetermined", "u")]
     case = BenchCase("c", "k", "q", "f u", targets)
     vs = {t.id: Verdict(Claim(t.claim, t.claim, "figure", True, True), "contradicted",
-                       proposed="contradicted", trace_run_id=f"trace_{t.id}", model="test-model") for t in targets}
+                       proposed="contradicted", trace_run_id=f"trace_{t.id}", model="test-model",
+                       citation_warnings=["extra citation"] if t.id == "f" else []) for t in targets}
     summary = BenchSummary([score_atomic(case, vs)], mode="atomic")
     assert summary.precision == 0.5 and summary.extraction_coverage is None
     saved = json.loads(json.dumps(summary.as_dict()))
     assert saved["cases"][0]["target_verdicts"]["u"][0]["trace_run_id"] == "trace_u"
+    assert saved["metrics"]["citation_warnings"] == 1
     assert "N/A (bypassed)" in summary.render() and "restraint 0/1" in summary.render()
 
 
@@ -240,6 +244,47 @@ def test_duplicate_verdict_keys_are_not_silently_overwritten():
                             '"evidence":"x","relation":"record","references":[]}')[1]
 
 
+def test_one_fenced_assessment_may_have_surrounding_prose():
+    answer = 'I checked the records.\n```json\n{"verdict":"undetermined","evidence":"missing",' \
+             '"relation":"market_cause","references":[]}\n```\nDone.'
+    parsed, error = parse_assessment(answer)
+    assert not error and parsed["verdict"] == "undetermined"
+    assert parse_assessment(answer + '\n```json\n{}\n```')[1]
+
+
+def test_invalid_extra_citation_is_a_warning_not_a_fatal_error():
+    t = trace_for({"records": [{"result": "Pass", "action": None}]},
+                  {"population": "risk_checks", "filters": {"result": "Pass"}},
+                  tool="query_records")
+    a = assessment(t, "/data/records/0/result", "Pass")
+    a["references"].append({"call": 1, "path": "/summary", "value": "made up"})
+    refs, warnings, error = validate_evidence(a, t)
+    assert not error and len(refs) == 1 and len(warnings) == 1
+
+
+def test_exact_null_is_a_citable_scalar():
+    t = trace_for({"records": [{"result": "Pass", "action": None}]}, tool="query_records")
+    a = assessment(t, "/data/records/0/action", None)
+    refs, warnings, error = validate_evidence(a, t)
+    assert not error and not warnings and refs[0]["value"] is None
+
+
+def test_order_fallback_filter_has_complete_authoritative_count(database):
+    r = dispatch("query_blotter", {"entity": "orders", "fallback_reason": "timeout", "limit": 1}, database)
+    expected = database.execute(text("SELECT COUNT(*) FROM orders WHERE fallback_reason='timeout'")).scalar_one()
+    assert r.provenance["total_rows"] == expected > 1
+    assert len(r.data) == 1 and r.provenance["truncated"]
+    t = Trace("q")
+    t.record_tool("query_blotter", {}, r, 0, 1)
+    assert evidence_is_grounded(assessment(t, "/provenance/total_rows", expected, "aggregate"), t)[0]
+
+
+def test_blotter_date_range_normalises_position_timestamps(database):
+    from src.tools.base import blotter_date_range
+    first, last = blotter_date_range(database)
+    assert len(first) == len(last) == 10
+
+
 def test_stop_count_verification_runs_through_real_tools_and_saves_references(database, tmp_path):
     args = {"entity": "stop_orders", "status": "triggered", "start_date": "2026-08-24", "end_date": "2026-08-24"}
     result = dispatch("query_records", args, database)
@@ -262,9 +307,9 @@ def test_mixed_anomaly_sections_keep_their_own_scope():
                   {"population": "system_events", "date_basis": "occurred_at",
                    "scopes": {"failed_risk_checks": scope}}, tool="detect_anomalies")
     a = assessment(t, "/data/failed_risk_checks/0/result", "Fail")
-    assert not evidence_is_grounded(a, t)[0]
-    a["references"][0]["scope"] = scope
-    assert evidence_is_grounded(a, t)[0]
+    a["references"][0]["scope"] = {"population": "wrong"}
+    refs, warnings, error = validate_evidence(a, t)
+    assert not error and not warnings and refs[0]["scope"] == scope
 
 
 def test_extractor_transport_failure_is_reported(database):

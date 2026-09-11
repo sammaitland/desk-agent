@@ -99,7 +99,8 @@ def execution_quality(
         row["limit_timeout_seconds"] = cfg.LIMIT_ORDER_TIMEOUT
         return ToolResult(
             data=row,
-            provenance={"order_id": order_id, "rows": 1},
+            provenance={"population": "orders", "filters": {"order_id": order_id},
+                        "rows": 1},
             summary=(f"{row['ticker']} {row['side']} {row['order_type']}: "
                      f"{row['slippage_bps']}bps slippage on a {row['spread_bps']}bps spread."),
         )
@@ -151,6 +152,7 @@ def execution_quality(
     return ToolResult(
         data={"breakdown": rows, "totals": totals},
         provenance={
+            "population": "orders", "date_basis": "placed_at",
             "window": [start, end], "group_by": group_by,
             "filters": {"ticker": ticker}, "rows": len(rows),
             "benchmark": "arrival_mid",

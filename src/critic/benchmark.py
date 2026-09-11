@@ -211,6 +211,7 @@ class BenchSummary:
                     "ambiguous_targets": "ambiguous"}.items()},
                 "proposed_contradictions": sum(v.proposed == "contradicted" for r in self.results for v in _all_verdicts(r)),
                 "downgrades": sum(bool(v.downgraded) for r in self.results for v in _all_verdicts(r)),
+                "citation_warnings": sum(len(v.citation_warnings) for r in self.results for v in _all_verdicts(r)),
             },
             "cases": [{"name": r.case.name, "kind": r.case.kind, "passed": r.passed,
                        "question": r.case.question, "answer": r.case.answer,
@@ -238,7 +239,8 @@ class BenchSummary:
                  f"precision {self.precision:.0%}   restraint {self.total('restrained')}/{restraint_n}",
                  f"caught {self.total('caught')}  confirmed {self.total('confirmed')}  restrained {self.total('restrained')}  "
                  f"cautions {self.total('caution')}  unresolved {self.total('unresolved')}  "
-                 f"assessment errors {self.total('assessment_error')}",
+                 f"assessment errors {self.total('assessment_error')}  "
+                 f"citation warnings {sum(len(v.citation_warnings) for r in self.results for v in _all_verdicts(r))}",
                  f"ERRORS — false alarms {self.total('false_alarm')}  false verifications {self.total('false_verify')}  "
                  f"overreach {self.total('overreach')}  unmatched flags {sum(len(r.unmatched_flags) for r in self.results)}  "
                  f"ambiguous {sum(len(r.ambiguous_claims) for r in self.results)}",

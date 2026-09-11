@@ -32,6 +32,7 @@ def query_blotter(
     status: str | None = None,
     stage: str | None = None,
     traded: bool | int | None = None,
+    fallback_reason: str | None = None,
     limit: int = 50,
     date_basis: str | None = None,
 ) -> ToolResult:
@@ -54,10 +55,13 @@ def query_blotter(
     Dates are ISO (YYYY-MM-DD) and inclusive; omitting them covers the whole
     blotter. `ticker` matches either leg of a position. `status` accepts
     open/closed for positions and Filled/Partial/Failed for orders.
+    `fallback_reason` filters orders, for example timeout fallbacks.
     """
     if date_basis is not None and (entity != "positions" or date_basis not in
             ("trade_initiation_date", "termination_date")):
         return empty("Invalid arguments: date_basis is entry/exit date for positions only.", error=True)
+    if fallback_reason is not None and entity != "orders":
+        return empty("Invalid arguments: fallback_reason is for orders only.", error=True)
     basis = date_basis or {"positions": "trade_initiation_date", "orders": "placed_at",
                           "candidates": "evaluated_at", "runs": "run_date"}.get(entity)
     start, end = resolve_window(conn, start_date, end_date)
@@ -98,6 +102,9 @@ def query_blotter(
         if status:
             where.append("o.status = :status")
             params["status"] = status
+        if fallback_reason:
+            where.append("o.fallback_reason = :fallback_reason")
+            params["fallback_reason"] = fallback_reason
         order = "ORDER BY o.placed_at DESC"
 
     elif entity == "candidates":
@@ -146,22 +153,28 @@ def query_blotter(
 
     if where:
         sql += " AND " + " AND ".join(where)
+    total_rows = conn.execute(text(f"SELECT COUNT(*) FROM ({sql}) matched"), params).scalar_one()
     sql += f" {order} LIMIT :limit"
 
     rows = rows_to_dicts(conn.execute(text(sql), params))
+    filters = {k: v for k, v in params.items()
+               if k not in ("start_date", "end_date", "limit")}
     if not rows:
         return empty(f"No {entity} matched those filters.",
-                     entity=entity, population=entity, date_basis=basis, window=[start, end], filters=params)
+                     entity=entity, population=entity, date_basis=basis,
+                     window=[start, end], filters=filters, total_rows=0,
+                     count_complete=True, filters_validated=True)
 
     return ToolResult(
         data=rows,
         provenance={
-            "entity": entity, "population": entity, "date_basis": basis, "rows": len(rows), "window": [start, end],
-            "filters": {k: v for k, v in params.items()
-                        if k not in ("start_date", "end_date", "limit")},
-            "truncated": len(rows) == limit,
+            "entity": entity, "population": entity, "date_basis": basis,
+            "rows": len(rows), "total_rows": total_rows, "window": [start, end],
+            "filters": filters, "truncated": len(rows) < total_rows,
+            "count_complete": True, "filters_validated": True,
         },
-        summary=f"{len(rows)} {entity} by {basis} between {start} and {end}.",
+        summary=(f"{total_rows} {entity} by {basis} between {start} and {end}; "
+                 f"showing {len(rows)}."),
     )
 
 
@@ -231,6 +244,17 @@ def explain_position(conn: Connection, tag: str) -> ToolResult:
         provenance={
             "tag": tag, "orders": len(orders), "daily_marks": len(updates),
             "events": len(events),
+            "scopes": {
+                "position": {"population": "positions", "filters": {"tag": tag}},
+                "entry_rationale": {"population": "positions", "filters": {"tag": tag}},
+                "execution": {"population": "orders", "date_basis": "placed_at",
+                              "filters": {"position_tag": tag}},
+                "stop_loss": {"population": "stop_orders", "filters": {"tag": tag}},
+                "alpha_path": {"population": "position_updates", "date_basis": "update_date",
+                               "filters": {"tag": tag}},
+                "related_events": {"population": "system_events", "date_basis": "occurred_at",
+                                   "filters": {"tag": tag}},
+            },
         },
         summary=(
             f"{tag}: {position['status']}"
@@ -312,8 +336,10 @@ def explain_rejection(
         data=rows,
         provenance={
             "rows": len(rows), "total_rejections": total_rejections,
+            "population": "pair_evaluations", "date_basis": "evaluated_at",
             "window": [start, end], "filters": {"pair": pair, "ticker": ticker},
             "reason_counts": tally, "truncated": truncated,
+            "count_complete": True, "filters_validated": True,
             "counts_cover": "the whole window, not just the rows returned",
         },
         summary=(f"{total_rejections} rejections between {start} and {end}; "

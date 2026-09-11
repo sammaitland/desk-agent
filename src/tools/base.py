@@ -94,10 +94,10 @@ def blotter_date_range(conn: Connection) -> tuple[str | None, str | None]:
     """
     row = conn.execute(text("""
         SELECT MIN(d), MAX(d) FROM (
-            SELECT MIN(run_date) AS d FROM workflow_runs
-            UNION ALL SELECT MAX(run_date) FROM workflow_runs
-            UNION ALL SELECT MIN(trade_initiation_date) FROM positions
-            UNION ALL SELECT MAX(COALESCE(termination_date, trade_initiation_date)) FROM positions
+            SELECT MIN(SUBSTR(run_date, 1, 10)) AS d FROM workflow_runs
+            UNION ALL SELECT MAX(SUBSTR(run_date, 1, 10)) FROM workflow_runs
+            UNION ALL SELECT MIN(SUBSTR(trade_initiation_date, 1, 10)) FROM positions
+            UNION ALL SELECT MAX(SUBSTR(COALESCE(termination_date, trade_initiation_date), 1, 10)) FROM positions
         ) WHERE d IS NOT NULL""")).one()
     return row[0], row[1]
 

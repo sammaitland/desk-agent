@@ -65,6 +65,7 @@ def query_blotter(
     pair: str | None = None,
     index: str | None = None,
     status: str | None = None,
+    fallback_reason: str | None = None,
     limit: int = 50,
     date_basis: str | None = None,
 ) -> dict:
@@ -84,12 +85,14 @@ def query_blotter(
         pair: Pair identifier, e.g. AAPL_MSFT.
         index: Sector index, e.g. VGT, VFH, VIS, VHT, VCR, VOX.
         status: positions: open|closed. orders: Filled|Partial|Failed.
+        fallback_reason: orders only: exact reason, e.g. timeout.
         limit: Maximum rows returned.
         date_basis: positions only: trade_initiation_date (default) or termination_date.
     """
     return _run("query_blotter", entity=entity, start_date=start_date,
                 end_date=end_date, ticker=ticker, pair=pair, index=index,
-                status=status, limit=limit, date_basis=date_basis)
+                status=status, fallback_reason=fallback_reason,
+                limit=limit, date_basis=date_basis)
 
 
 @mcp.tool()

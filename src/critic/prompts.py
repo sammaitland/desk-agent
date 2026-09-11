@@ -102,6 +102,9 @@ trade_initiation_date. Use date_basis="termination_date" for exits. Closed
 status describes current state, not the date of closing. For events use
 canonical labels (partial_fill, order_timeout); a validation error is not zero.
 Events, orders, positions and stops are distinct counting units.
+When a claim counts orders that fell back to market, query orders with
+fallback_reason="timeout" and cite the complete order count. An event count
+is not an order count, even when both happen to have the same value.
 
 ## Output
 
@@ -110,32 +113,34 @@ Return ONE JSON object and no surrounding prose:
  "evidence": "What the specific records establish, or what evidence is missing.",
  "relation": "record|recorded_reason|aggregate|market_cause",
  "references": [{"call": 1, "path": "/data/records/0/current_value",
-                 "value": 1234.56,
-                 "scope": {"population": "risk_checks", "date_basis": "checked_at",
-                           "window": ["2020-01-10", "2020-01-10"],
-                           "filters": {"subject": "EXAMPLE_PAIR", "check_name": "position_size"}}}]}
+                 "value": 1234.56}]}
 
 The example describes the format; use ONLY your actual results. Each result
 contains evidence_call, its 1-based call number. Use that number, not a turn
 number. Paths are JSON pointers inside the result's data or provenance.
-Copy exact scalar values, preserving numeric signs and units; do not convert
-percentages or round cited values. Explain comparisons in evidence. For each
-reference copy ALL keys present in its provenance from this list into scope:
-population, date_basis, window, filters, group_by, status. If none exist use {}.
-For detect_anomalies references inside failed_risk_checks or halted_runs, copy
-these keys from provenance.scopes.<section> instead: their populations differ.
+Copy each cited scalar exactly, preserving numeric signs and units; do not
+convert or round the value in a reference. The claim itself may conventionally
+round a recorded number to the precision it displays: for example, -2.184%
+supports -2.18%, but not -2.19% or +2.18%. Scope is attached by the critic from
+the cited call and path; do not write a scope object yourself.
 Reference entity IDs and dates alongside measured values when deciding a
 record claim. A correct citation to the wrong population does not settle it.
-For a count, cite /data/count from query_records or
-/provenance/event_type_counts/<canonical_label> from detect_anomalies.
+For a count, cite /data/count from query_records,
+/provenance/event_type_counts/<canonical_label> from detect_anomalies, or
+/provenance/total_rows from a filtered query_blotter call.
 These counts cover all matches, including zero; page lengths are not totals.
 For rankings cite the relevant returned breakdown values and grouping fields.
 For recorded_reason cite the actual reason/action field as well as its record
 identity. A stop's mechanism is not evidence excluding a market cause.
 For market_cause return undetermined: these tools contain no intraday market
 path or causal attribution method. Cite observations if useful and identify
-what is missing. References may be empty when evidence cannot settle a claim.
-A malformed reply or invalid reference is an assessment failure, not restraint.
+what is missing. Do not describe a recorded stop as having breached or crossed
+its level unless an intraday price path actually demonstrates that; "recorded
+as triggered" is the available fact. References may be empty when evidence
+cannot settle a claim. Keep the evidence explanation brief. A malformed reply
+or a settled verdict with no valid decisive reference is an assessment failure.
+An invalid extra reference is reported as a citation warning and does not erase
+other valid evidence.
 """
 
 

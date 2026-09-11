@@ -1,11 +1,7 @@
 # Claim Critic: implementation for the next review
 
-This change addresses the failures in the 7 September atomic run. It is built
-on repository commit `1396e35d3cfbc8c048815dd84e7e8901975c15d1`. At that
-commit, `critique.py`, `benchmark.py`, `prompts.py`, the benchmark runner,
-`test_critic.py` and `generate_blotter.py` matched the latest uploaded versions
-byte for byte. Supporting tools come from that repository revision, which
-also includes the subsequent adapter work.
+This change addresses the failures in the 7 September atomic run and the first
+live run of the evidence revision. It is built on repository commit `49adbf9`.
 
 ## What changed
 
@@ -23,15 +19,25 @@ also includes the subsequent adapter work.
   Event tallies use the full filtered population, even when the returned page
   is truncated. Mixed anomaly results distinguish event, risk-check and run
   scopes. A stop count comes from stop records, not orphan-event counts.
-- **Specific citations.** The verifier returns a JSON assessment. A settled
-  verdict requires references containing a call number, JSON pointer, copied
-  scalar value and returned scope. The loop exposes the call number in tool
-  responses. The guard rejects sign changes, implicit percentage conversions,
-  numbers extracted from dates, values borrowed from other calls, argument
-  echoes and chart outputs. It accepts authoritative zero counts. There is
-  no automatic numeric rounding: the model cites the exact returned value,
-  including values already rounded by an analytical tool.
-- **Uncertainty and failures.** Invalid JSON, invalid settled-verdict citations,
+- **Specific citations with derived scope.** The verifier returns call number,
+  JSON pointer and copied scalar value. Code resolves that path and attaches
+  the returned scope; the model does not transcribe provenance. The guard
+  rejects sign changes, implicit percentage conversions, numbers extracted
+  from dates, values borrowed from other calls, argument echoes and chart
+  outputs. It accepts authoritative zero counts and exact null fields. Invalid
+  extra citations are retained as warnings when other citations decisively
+  ground the verdict. A settled verdict with no valid primary citation remains
+  an assessment error.
+- **Claim rounding versus citation fidelity.** A citation must copy `-2.184`
+  exactly. A claim written as `-2.18%` may nevertheless be supported by that
+  value under conventional rounding to the displayed precision. The first live
+  revision conflated these two rules and created its one substantive false
+  alarm.
+- **Order-unit counts.** `query_blotter(entity="orders")` now filters by
+  `fallback_reason` and returns a complete, validated `provenance.total_rows`
+  alongside its bounded page. This gives timeout-fallback claims a direct order
+  count rather than tempting the verifier to substitute a system-event count.
+- **Uncertainty and failures.** Invalid JSON, settled verdicts without valid evidence,
   transport failures and exhausted turn budgets are assessment errors. They
   cannot earn restraint credit. Proposed verdicts, final verdicts, downgrades,
   references, model, usage and trace paths are retained. Extractor transport
@@ -57,17 +63,39 @@ also includes the subsequent adapter work.
 
 ## Validation
 
-Local Python 3.12 / SQLite suite: **372 passed, 1 skipped**. The skipped test
+Local Python 3.12 / SQLite suite: **377 passed, 1 skipped**. The skipped test
 requires optional `sentence_transformers`. The local proxy environment was
 cleared for the suite because the optional Langfuse construction test
 otherwise requires an additional SOCKS package; application code was not
 changed for that environment issue. No live model calls were made.
 
-The new regressions include the four stops on 24 August, a position entered
+The regressions include the four stops on 24 August, a position entered
 on 24 August and exited later, a passing check sharing a position's notional,
 an invalid stop-event label, multiple events for one order, truncated count
 pages, valid zero counts, malformed dates, field/sign/unit/scope mismatches,
-causal overreach, assessment failures and atomic verdict serialization.
+causal overreach, assessment failures, atomic verdict serialization, fenced
+JSON with surrounding prose, derived path-specific scope, citation warnings,
+null scalar citations, normalized date bounds and complete fallback-order counts.
+
+## First live evidence run and replay
+
+The frozen database fingerprint was
+`41a99adcf0e49cbb4ce2386d9f5b3861a1196a19de84e50d3bdd99cd6cd43f79`.
+The live atomic run produced 1 catch and 15 assessment errors. Inspection of
+all 16 traces found that the proposed verdict was substantively correct in
+15 cases. Seven answers contained exactly one valid fenced JSON assessment
+with harmless surrounding prose. Most remaining errors were scope-copy
+mismatches: the model added, omitted or renamed provenance keys while citing
+the correct call, path and value. One trace included an invalid extra summary
+citation alongside two valid data citations.
+
+Replaying those exact traces through the revised parser and evidence boundary
+accepts all 16 assessments with zero assessment errors and two visible citation
+warnings. Scored without changing the old model answers, that means 100% recall,
+87.5% precision and 1/1 restraint. The remaining old false alarm is the
+`-2.18%` versus `-2.184%` rounding decision; only a fresh model run can test the
+prompt correction. The replay is evidence about the boundary, not a substitute
+for the live benchmark.
 
 A separate synthetic validation database was generated with seed 42 and
 `--as-of 2026-09-07`. Its 13 table counts match the reported atomic run.
@@ -80,7 +108,7 @@ or precision.
 ## What Claude should challenge
 
 1. **Citation fidelity is not entailment.** The guard checks that references
-   faithfully reproduce the fields and declared scopes they cite. It does not
+   faithfully reproduce fields and derives their scopes from tool provenance. It does not
    prove that those fields justify the prose verdict. A model can faithfully
    cite a wrong population or an irrelevant fact. Scope references make that
    reviewable and reject relabelling; they do not implement natural-language
@@ -90,11 +118,11 @@ or precision.
    some phrasing may be overly restricted. Recorded-reason claims remain
    distinct from empirical market attribution. Judge this on new phrasing,
    not only the existing cluster sentence.
-3. **Strict citations may reduce recall.** JSON pointers and complete scope
-   copies add model work. We have not measured the compliance rate. Invalid
-   settled citations now become visible assessment failures instead of
-   apparent restraint. Check whether that cost is justified before widening
-   the format or adding another model stage.
+3. **Warning tolerance has a boundary.** A bad surplus citation no longer
+   invalidates good decisive citations. Challenge whether the relation-level
+   requirements are sufficient to stop one relevant scalar from laundering an
+   otherwise unsupported narrative. Warnings must remain visible in saved and
+   rendered results.
 4. **Record identity remains the model's responsibility.** Check-ID access
    removes a retrieval gap, but a pair/day can still contain multiple checks.
    The verifier must select the relevant record and cite its identity. This
@@ -112,17 +140,17 @@ regenerate that database to test this patch. Confirm the imported files first:
 ```bash
 python run_critic_benchmark.py --preflight > critic_preflight.json
 python run_critic_benchmark.py --atomic --save
-python run_critic_benchmark.py --save
 ```
 
 If the evaluation database is outside the checkout, add its explicit
 `--db-url` to each command. To enforce a frozen input, copy the full
-`database.fingerprint` from preflight into `--expect-db` on both live runs.
+`database.fingerprint` from preflight into `--expect-db` on the live run.
 Source and prompt hashes are now full SHA-256 strings; the database hash uses
 a new content-based definition and cannot be compared to the old short hash.
 
-Return the result JSONs, preflight JSON and referenced `traces/critic/` files.
+Return the result JSON, preflight JSON and referenced `traces/critic/` files.
 Compare final outcomes, proposed outcomes, citation failures and tool use
 separately. In particular, verify that the near-cap investigations retrieve
 the actual check, stop counts use `triggered_at`, partial-fill claims count
-events, and market-cause claims remain undetermined for the right reason.
+events, and market-cause claims remain undetermined for the right reason. Do
+not spend on the end-to-end run until the atomic result has been reviewed.

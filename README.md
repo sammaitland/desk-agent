@@ -108,7 +108,8 @@ twenty-two cases are never used for tuning.
 the figures. *"Rejected because its notional came within $18 of the cap"* had
 two real numbers, an invented causal link, and passed every check. The critic
 assesses each claim separately. Settled verdicts require references to exact
-tool fields and their scope. Passing risk checks and triggered stops have a
+tool fields; scope is derived from the cited call and path. Passing risk checks
+and triggered stops have a
 direct lookup; position queries distinguish entry and exit dates. Invalid
 assessments are reported separately from evidence-based uncertainty.
 
