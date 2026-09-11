@@ -12,6 +12,7 @@ from sqlalchemy.engine import Connection
 
 from src import config as cfg
 from src.tools.base import (
+    invalid_date_window,
     MAX_ROWS,
     clamp_limit,
     ToolResult,
@@ -165,6 +166,7 @@ def alpha_attribution(
     end_date: str | None = None,
     group_by: str = "idx",
     status: str = "closed",
+    date_basis: str = "trade_initiation_date",
 ) -> ToolResult:
     """Break down realised alpha across the book.
 
@@ -186,7 +188,9 @@ def alpha_attribution(
                      f"{', '.join(columns)}.")
 
     params = {"start_date": start, "end_date": end}
-    where = [date_clause("trade_initiation_date"), "final_alpha_return_pct IS NOT NULL"]
+    if date_basis not in ("trade_initiation_date", "termination_date"):
+        return empty("Invalid arguments: date_basis must be trade_initiation_date or termination_date.", error=True)
+    where = [date_clause(date_basis), "final_alpha_return_pct IS NOT NULL"]
     if status:
         where.append("status = :status")
         params["status"] = status
@@ -207,7 +211,7 @@ def alpha_attribution(
 
     if not rows:
         return empty("No closed positions matched those filters.",
-                     window=[start, end], group_by=group_by)
+                     window=[start, end], group_by=group_by, date_basis=date_basis)
 
     for row in rows:
         row["win_rate_pct"] = pct(row["winners"], row["trades"])
@@ -222,12 +226,13 @@ def alpha_attribution(
                          "avg_alpha_pct": round(total / trades, 3) if trades else 0.0}},
         provenance={
             "window": [start, end], "group_by": group_by, "status": status,
+            "population": "positions", "date_basis": date_basis,
             "rows": len(rows),
             "measure": "index-relative alpha (W1*co1 - W2*co2 - beta*index)",
             "total_alpha_note": ("sum of per-trade alpha percentages, unweighted by "
                                  "notional or duration; not a portfolio return"),
         },
-        summary=(f"{trades} closed trades {start} to {end}, summed per-trade alpha {total}%. "
+        summary=(f"{trades} {status} trades by {date_basis}, {start} to {end}, summed per-trade alpha {total}%. "
                  f"Best {group_by}: {best['grouping']} ({best['total_alpha_pct']}%); "
                  f"worst: {worst['grouping']} ({worst['total_alpha_pct']}%)."),
     )
@@ -252,6 +257,21 @@ def detect_anomalies(
     first call when a question implies something broke. `severity` accepts
     info, warning or halt.
     """
+    date_error = invalid_date_window(start_date, end_date)
+    if date_error:
+        return empty(f"Invalid arguments: {date_error}.", error=True)
+    canonical = {"partial_fill", "order_timeout", "orphan_detection", "orphan_closure",
+                 "factor_shock_exposure", "spread_validation_failure", "delisting_detection",
+                 "leverage_exceeded", "reconciliation_mismatch", "ibkr_connection_error"}
+    canonical |= set(conn.execute(text("SELECT DISTINCT event_type FROM system_events")).scalars())
+    aliases = {"partial fill": "partial_fill", "order timeout": "order_timeout"}
+    event_type = aliases.get(event_type, event_type)
+    if event_type is not None and event_type not in canonical:
+        return empty(f"Invalid arguments: unknown event_type '{event_type}'. Use one of "
+                     f"{', '.join(sorted(canonical))}. For stop triggers use query_records with stop_orders.",
+                     error=True, allowed_event_types=sorted(canonical))
+    if severity is not None and severity not in ("info", "warning", "halt"):
+        return empty("Invalid arguments: severity must be info, warning or halt.", error=True)
     start, end = resolve_window(conn, start_date, end_date)
     params = {"start_date": start, "end_date": end, "limit": clamp_limit(limit)}
     where = [date_clause("occurred_at")]
@@ -264,7 +284,7 @@ def detect_anomalies(
         params["event_type"] = event_type
 
     events = rows_to_dicts(conn.execute(text(f"""
-        SELECT occurred_at, event_type, severity, ticker, tag, order_id,
+        SELECT event_id, occurred_at, event_type, severity, ticker, tag, order_id,
                detail, remedy_action, resolved, resolution
         FROM system_events WHERE {' AND '.join(where)}
         ORDER BY CASE severity WHEN 'halt' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
@@ -284,27 +304,41 @@ def detect_anomalies(
         ORDER BY run_date DESC"""),
         {"start_date": start, "end_date": end}))
 
+    tally = dict(conn.execute(text(f"""
+        SELECT event_type, COUNT(*) FROM system_events WHERE {' AND '.join(where)}
+        GROUP BY event_type ORDER BY event_type"""), params).all())
+    if event_type is not None:
+        tally.setdefault(event_type, 0)
+    event_count = sum(tally.values())
+    scope = {"population": "system_events", "date_basis": "occurred_at", "window": [start, end],
+             "filters": {"severity": severity, "event_type": event_type},
+             "event_type_counts": tally, "event_count": event_count,
+             "count_complete": True, "filters_validated": True}
     if not events and not failed_checks and not halted_runs:
-        return empty(f"No anomalies recorded between {start} and {end}.",
-                     window=[start, end])
+        return empty(f"No anomalies recorded between {start} and {end}.", **scope)
 
-    tally: dict[str, int] = {}
-    for event in events:
-        tally[event["event_type"]] = tally.get(event["event_type"], 0) + 1
     halts = sum(1 for e in events if e["severity"] == "halt")
 
     return ToolResult(
         data={"events": events, "failed_risk_checks": failed_checks,
               "halted_runs": halted_runs},
         provenance={
-            "window": [start, end], "rows": len(events),
+            **scope, "rows": len(events),
             "event_type_counts": tally,
             "failed_risk_checks": len(failed_checks),
             "halted_runs": len(halted_runs),
             "filters": {"severity": severity, "event_type": event_type},
-            "truncated": len(events) == params["limit"],
+            "truncated": event_count > len(events),
+            "scopes": {
+                "failed_risk_checks": {"population": "risk_checks", "date_basis": "checked_at",
+                                       "window": [start, end], "filters": {"result": "Fail"}},
+                "halted_runs": {"population": "workflow_runs", "date_basis": "run_date",
+                                "window": [start, end], "filters": {"outcome_not": "completed"}},
+            },
+            "risk_checks_truncated": len(failed_checks) == 50,
+            "risk_checks_filter_note": "Date window only; severity and event_type apply to events.",
         },
-        summary=(f"{len(events)} events between {start} and {end} "
-                 f"({halts} halts), {len(failed_checks)} failed risk checks, "
+        summary=(f"{event_count} events by occurred_at between {start} and {end}; "
+                 f"returned {len(events)} ({halts} halts in returned page), {len(failed_checks)} failed risk checks, "
                  f"{len(halted_runs)} incomplete runs."),
     )

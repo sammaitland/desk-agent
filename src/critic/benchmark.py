@@ -65,10 +65,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+import sys
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
 from src import config as cfg
@@ -123,6 +124,7 @@ class BenchResult:
     outcome: dict[str, str] = field(default_factory=dict)
     ambiguous_claims: list[str] = field(default_factory=list)
     unmatched_flags: list[str] = field(default_factory=list)
+    target_verdicts: dict[str, list[Verdict]] = field(default_factory=dict)
 
     # Outcome vocabulary:
     #   caught          expected contradicted, got contradicted (grounded)
@@ -147,7 +149,7 @@ class BenchResult:
     def passed(self) -> bool:
         if self.critique is not None and not self.critique.complete:
             return False
-        return self.errors == 0 and self.count("not_extracted", "ambiguous") == 0 \
+        return self.errors == 0 and self.count("not_extracted", "ambiguous", "assessment_error") == 0 \
             and self.count("caution", "unresolved") == 0
 
 
@@ -164,8 +166,10 @@ class BenchSummary:
         return sum(len(r.case.targets) for r in self.results)
 
     @property
-    def extraction_coverage(self) -> float:
+    def extraction_coverage(self) -> float | None:
         """Unique targets that some claim overlapped, over all targets."""
+        if self.mode == "atomic":
+            return None
         covered = self.targets - self.total("not_extracted")
         return covered / self.targets if self.targets else 0.0
 
@@ -178,11 +182,44 @@ class BenchSummary:
     @property
     def precision(self) -> float:
         """Grounded contradictions over all contradictions issued."""
-        issued = self.total("caught", "false_alarm") + sum(
-            1 for r in self.results for t, o in r.outcome.items()
-            if o == "overreach" and _verdict_for(r, t) == "contradicted"
-        ) + sum(len(r.unmatched_flags) for r in self.results)
-        return self.total("caught") / issued if issued else 1.0
+        issued = sum(v.verdict == "contradicted" for r in self.results for v in _all_verdicts(r))
+        correct = sum(v.verdict == "contradicted" for r in self.results
+                      for t in r.case.by_expected("contradicted")
+                      for v in r.target_verdicts.get(t.id, []))
+        return correct / issued if issued else 1.0
+
+    @property
+    def gate_passed(self) -> bool:
+        return (bool(self.results) and self.recall >= 0.6
+                and all(r.errors == 0 and not r.ambiguous_claims
+                        and r.count("not_extracted", "ambiguous", "assessment_error") == 0
+                        and (r.critique is None or r.critique.complete) for r in self.results))
+
+    def as_dict(self) -> dict:
+        return {
+            "mode": self.mode,
+            "gate_passed": self.gate_passed,
+            "metrics": {
+                "extraction_coverage": self.extraction_coverage,
+                "recall": self.recall, "precision": self.precision, "restraint": self.restraint,
+                "restraint_targets": sum(len(r.case.by_expected("undetermined")) for r in self.results),
+                **{name: self.total(outcome) for name, outcome in {
+                    "caught": "caught", "confirmed": "confirmed", "restrained": "restrained",
+                    "cautions": "caution", "unresolved": "unresolved", "false_alarms": "false_alarm",
+                    "false_verifications": "false_verify", "overreach": "overreach",
+                    "assessment_errors": "assessment_error", "not_extracted": "not_extracted",
+                    "ambiguous_targets": "ambiguous"}.items()},
+                "proposed_contradictions": sum(v.proposed == "contradicted" for r in self.results for v in _all_verdicts(r)),
+                "downgrades": sum(bool(v.downgraded) for r in self.results for v in _all_verdicts(r)),
+            },
+            "cases": [{"name": r.case.name, "kind": r.case.kind, "passed": r.passed,
+                       "question": r.case.question, "answer": r.case.answer,
+                       "outcome": r.outcome, "ambiguous": r.ambiguous_claims, "unmatched": r.unmatched_flags,
+                       "targets": [asdict(t) for t in r.case.targets],
+                       "target_verdicts": {key: [asdict(v) for v in vs] for key, vs in r.target_verdicts.items()},
+                       "critique": r.critique.as_dict() if r.critique is not None else None}
+                      for r in self.results],
+        }
 
     @property
     def restraint(self) -> float:
@@ -190,15 +227,18 @@ class BenchSummary:
         return self.total("restrained") / expected if expected else 1.0
 
     def render(self) -> str:
+        coverage = "N/A (bypassed)" if self.extraction_coverage is None else f"{self.extraction_coverage:.0%}"
+        restraint_n = sum(len(r.case.by_expected("undetermined")) for r in self.results)
         lines = ["", "=" * 74, f"CRITIC BENCHMARK ({self.mode})", "=" * 74,
                  f"cases {len(self.results)}   targets {self.targets}   "
                  f"expected: {sum(len(r.case.by_expected('contradicted')) for r in self.results)} contradicted, "
                  f"{sum(len(r.case.by_expected('supported')) for r in self.results)} supported, "
                  f"{sum(len(r.case.by_expected('undetermined')) for r in self.results)} undetermined",
-                 f"extraction coverage {self.extraction_coverage:.0%}   recall {self.recall:.0%}   "
-                 f"precision {self.precision:.0%}   restraint {self.restraint:.0%}",
+                 f"extraction coverage {coverage}   recall {self.recall:.0%}   "
+                 f"precision {self.precision:.0%}   restraint {self.total('restrained')}/{restraint_n}",
                  f"caught {self.total('caught')}  confirmed {self.total('confirmed')}  restrained {self.total('restrained')}  "
-                 f"cautions {self.total('caution')}  unresolved {self.total('unresolved')}",
+                 f"cautions {self.total('caution')}  unresolved {self.total('unresolved')}  "
+                 f"assessment errors {self.total('assessment_error')}",
                  f"ERRORS — false alarms {self.total('false_alarm')}  false verifications {self.total('false_verify')}  "
                  f"overreach {self.total('overreach')}  unmatched flags {sum(len(r.unmatched_flags) for r in self.results)}  "
                  f"ambiguous {sum(len(r.ambiguous_claims) for r in self.results)}",
@@ -218,15 +258,10 @@ class BenchSummary:
         return "\n".join(lines)
 
 
-def _verdict_for(r: BenchResult, target_id: str) -> str | None:
-    if r.critique is None:
-        return None
-    t = next(x for x in r.case.targets if x.id == target_id)
-    for v in r.critique.verdicts:
-        i = r.case.answer.find(v.claim.source)
-        if i >= 0 and t.overlaps(i, i + len(v.claim.source)):
-            return v.verdict
-    return None
+def _all_verdicts(r: BenchResult) -> list[Verdict]:
+    if r.critique is not None:
+        return r.critique.verdicts
+    return [v for vs in r.target_verdicts.values() for v in vs]
 
 
 # ---------------------------------------------------------------------------
@@ -429,19 +464,22 @@ def score(case: BenchCase, crit: Critique) -> BenchResult:
             r.outcome[t.id] = "ambiguous"
         else:
             # If several claims align uniquely, the worst verdict governs
+            r.target_verdicts[t.id] = aligned
             verdicts = [v.verdict for v in aligned if v.verdict != "skipped"]
-            if not verdicts:
+            if any(v.assessment_error for v in aligned):
+                r.outcome[t.id] = "assessment_error"
+            elif not verdicts:
                 r.outcome[t.id] = "not_extracted"
             else:
                 outs = [_outcome(t.expected, vd) for vd in verdicts]
                 bad = [o for o in outs if o in ("false_alarm", "false_verify", "overreach")]
-                r.outcome[t.id] = bad[0] if bad else outs[0]
+                r.outcome[t.id] = bad[0] if bad else ("caution" if "caution" in outs else "unresolved" if "unresolved" in outs else outs[0])
 
     for idx, ts in claim_targets.items():
         v = located[idx][0]
         if len(ts) > 1:
             r.ambiguous_claims.append(v.claim.source[:70])
-        elif not ts and v.flag is not None:
+        elif not ts and v.verdict == "contradicted":
             r.unmatched_flags.append(v.claim.source[:70])
     return r
 
@@ -451,7 +489,8 @@ def score_atomic(case: BenchCase, verdicts: dict[str, Verdict]) -> BenchResult:
     r = BenchResult(case=case, critique=None)
     for t in case.targets:
         v = verdicts.get(t.id)
-        r.outcome[t.id] = _outcome(t.expected, v.verdict) if v else "not_extracted"
+        r.target_verdicts[t.id] = [v] if v else []
+        r.outcome[t.id] = ("assessment_error" if v.assessment_error else _outcome(t.expected, v.verdict)) if v else "not_extracted"
     return r
 
 
@@ -501,25 +540,55 @@ def run_atomic(conn: Connection, client=None, cases: list[BenchCase] | None = No
 # Provenance
 # ---------------------------------------------------------------------------
 
+def database_digest(conn: Connection) -> tuple[str, dict[str, int]]:
+    """Logical SHA-256 of every table's schema/rows; row order is immaterial.
+
+    Intended for a frozen local evaluation database. Row digests keep memory
+    bounded to 32 bytes per row while retaining duplicates. This is not a
+    claim of a cross-backend byte-identical representation.
+    """
+    digest = hashlib.sha256()
+    counts = {}
+    inspector = inspect(conn)
+    quote = conn.dialect.identifier_preparer.quote
+    for table in sorted(inspector.get_table_names()):
+        columns = sorted(c["name"] for c in inspector.get_columns(table))
+        digest.update(json.dumps([table, columns], ensure_ascii=False).encode())
+        rows = []
+        query = f"SELECT {', '.join(quote(c) for c in columns)} FROM {quote(table)}"
+        for row in conn.execute(text(query)):
+            encoded = json.dumps(list(row), ensure_ascii=False, default=str, separators=(",", ":")).encode()
+            rows.append(hashlib.sha256(encoded).digest())
+        counts[table] = len(rows)
+        digest.update(str(len(rows)).encode())
+        for row_digest in sorted(rows):
+            digest.update(row_digest)
+    return digest.hexdigest(), counts
+
+
 def provenance(conn: Connection, cases: list[BenchCase], model: str) -> dict:
-    """What produced this run. Makes stale data and mixed revisions testable."""
+    """Hash source files, actual imports, tool schemas and database contents."""
     root = Path(__file__).resolve().parent.parent.parent
-    files = ["src/critic/critique.py", "src/critic/benchmark.py", "src/critic/prompts.py",
-             "src/agent/loop.py", "src/agent/prompt.py", "src/tools/__init__.py",
-             "src/generate_blotter.py", "schema.sql"]
-    hashes = {f: hashlib.sha256((root / f).read_bytes()).hexdigest()[:16]
-              for f in files if (root / f).exists()}
+    files = sorted((root / "src").rglob("*.py")) + [root / "schema.sql", root / "run_critic_benchmark.py"]
+    hashes = {str(f.relative_to(root)): hashlib.sha256(f.read_bytes()).hexdigest()
+              for f in files if f.is_file()}
+    imports = {}
+    for name, module in list(sys.modules.items()):
+        if name == "src" or name.startswith("src."):
+            path = getattr(module, "__file__", None)
+            if path and Path(path).is_file():
+                imports[name] = {"path": str(Path(path).resolve()),
+                                 "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
     from src.critic.prompts import EXTRACTOR_PROMPT, VERIFIER_PROMPT
-    counts = {t: conn.execute(text(f"SELECT COUNT(*) FROM {t}")).scalar()
-              for t in ("positions", "orders", "fills", "pair_evaluations", "risk_checks",
-                        "system_events", "stop_orders", "workflow_runs")}
+    from src.tools import TOOL_SCHEMAS
+    fingerprint, counts = database_digest(conn)
     first, last = conn.execute(text("SELECT MIN(run_date), MAX(run_date) FROM workflow_runs")).one()
-    db_fingerprint = hashlib.sha256(json.dumps([counts, first, last], sort_keys=True).encode()).hexdigest()[:16]
     return {
-        "model": model,
-        "source_hashes": hashes,
-        "extractor_prompt_hash": hashlib.sha256(EXTRACTOR_PROMPT.encode()).hexdigest()[:16],
-        "verifier_prompt_hash": hashlib.sha256(VERIFIER_PROMPT.encode()).hexdigest()[:16],
+        "model": model, "source_hashes": hashes, "imported_modules": imports,
+        "tool_schema_hash": hashlib.sha256(json.dumps(TOOL_SCHEMAS, sort_keys=True).encode()).hexdigest(),
+        "extractor_prompt_hash": hashlib.sha256(EXTRACTOR_PROMPT.encode()).hexdigest(),
+        "verifier_prompt_hash": hashlib.sha256(VERIFIER_PROMPT.encode()).hexdigest(),
         "case_set_hash": case_set_hash(cases),
-        "database": {"fingerprint": db_fingerprint, "row_counts": counts, "window": [first, last]},
+        "database": {"fingerprint": fingerprint, "fingerprint_kind": "logical_rows_sha256_v1",
+                     "row_counts": counts, "window": [first, last]},
     }

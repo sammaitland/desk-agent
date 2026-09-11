@@ -93,7 +93,7 @@ class Trace:
             turn=turn,
             # A tool that returns nothing is not an error; one that could not
             # run is. The distinction matters when reviewing a trace.
-            error=summary.startswith(("Unknown tool", "Invalid arguments")),
+            error=bool(provenance.get("error")) or summary.startswith(("Unknown tool", "Invalid arguments")),
             raw_result=getattr(result, "data", None),
             provenance=dict(provenance),
         ))

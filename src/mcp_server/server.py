@@ -66,6 +66,7 @@ def query_blotter(
     index: str | None = None,
     status: str | None = None,
     limit: int = 50,
+    date_basis: str | None = None,
 ) -> dict:
     """Look up raw records from the trade blotter.
 
@@ -84,10 +85,29 @@ def query_blotter(
         index: Sector index, e.g. VGT, VFH, VIS, VHT, VCR, VOX.
         status: positions: open|closed. orders: Filled|Partial|Failed.
         limit: Maximum rows returned.
+        date_basis: positions only: trade_initiation_date (default) or termination_date.
     """
     return _run("query_blotter", entity=entity, start_date=start_date,
                 end_date=end_date, ticker=ticker, pair=pair, index=index,
-                status=status, limit=limit)
+                status=status, limit=limit, date_basis=date_basis)
+
+
+@mcp.tool()
+def query_records(entity: str, start_date: str | None = None, end_date: str | None = None,
+                  record_id: str | None = None, subject: str | None = None,
+                  check_name: str | None = None, result: str | None = None,
+                  tag: str | None = None, status: str | None = None, limit: int = 50) -> dict:
+    """Read authoritative checks (Pass and Fail) or stops with trigger timestamps.
+
+    entity=risk_checks filters checked_at; subject/check_name/result select checks.
+    entity=stop_orders filters triggered_at; tag/status select stops. record_id
+    is a check_id or stop_order_tag. Count covers all matches even if records
+    are truncated. Omitted dates cover this table's timestamps. Rejections and
+    entry-date position cohorts cannot substitute for these records.
+    """
+    return _run("query_records", entity=entity, start_date=start_date, end_date=end_date,
+                record_id=record_id, subject=subject, check_name=check_name,
+                result=result, tag=tag, status=status, limit=limit)
 
 
 @mcp.tool()
@@ -172,6 +192,7 @@ def alpha_attribution(
     end_date: str | None = None,
     group_by: str = "idx",
     status: str = "closed",
+    date_basis: str = "trade_initiation_date",
 ) -> dict:
     """Break down realised alpha across the book.
 
@@ -185,9 +206,10 @@ def alpha_attribution(
         end_date: Inclusive ISO date.
         group_by: 'idx', 'sum_dev_bucket', 'tail', 'exit_reason' or 'month'.
         status: Position status; only closed trades carry a final alpha.
+        date_basis: trade_initiation_date (default) selects entry cohorts; termination_date selects exits.
     """
     return _run("alpha_attribution", start_date=start_date, end_date=end_date,
-                group_by=group_by, status=status)
+                group_by=group_by, status=status, date_basis=date_basis)
 
 
 @mcp.tool()
@@ -209,7 +231,8 @@ def detect_anomalies(
         start_date: Inclusive ISO date.
         end_date: Inclusive ISO date.
         severity: 'info', 'warning' or 'halt'. A halt means trading stopped.
-        event_type: Restrict to one event type.
+        event_type: Canonical label, e.g. partial_fill. Unknown labels return errors.
+            Stop triggers are queried through query_records(entity=stop_orders).
         limit: Maximum events returned.
     """
     return _run("detect_anomalies", start_date=start_date, end_date=end_date,

@@ -90,7 +90,7 @@ def _cached_tools(schemas: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return tools
 
 
-def _tool_result_block(tool_use_id: str, result) -> dict[str, Any]:
+def _tool_result_block(tool_use_id: str, result, evidence_call: int | None = None) -> dict[str, Any]:
     """Serialise a ToolResult into the block shape the API expects.
 
     `content` must be a string, so the structured result is JSON-encoded. The
@@ -100,7 +100,8 @@ def _tool_result_block(tool_use_id: str, result) -> dict[str, Any]:
     return {
         "type": "tool_result",
         "tool_use_id": tool_use_id,
-        "content": json.dumps(result.as_dict(), default=str),
+        "content": json.dumps({**result.as_dict(), **({"evidence_call": evidence_call}
+                               if evidence_call is not None else {})}, default=str),
     }
 
 
@@ -170,7 +171,7 @@ def run_agent(
                 result = dispatch(block.name, dict(block.input), conn)
                 elapsed = int((time.perf_counter() - started) * 1000)
                 trace.record_tool(block.name, dict(block.input), result, elapsed, turn)
-                results.append({**_tool_result_block(block.id, result), "_turn": turn})
+                results.append({**_tool_result_block(block.id, result, len(trace.tool_calls)), "_turn": turn})
 
             messages.append({"role": "user", "content": results})
 

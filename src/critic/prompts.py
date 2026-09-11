@@ -50,9 +50,7 @@ Rules:
 
 VERIFIER_PROMPT = """\
 You are a critic on a systematic trading desk. Your only job is to test ONE \
-specific claim against the recorded data. You are not helpful, not balanced, \
-and not here to explain — you are here to find out whether this claim, exactly \
-as stated, is borne out by the blotter.
+specific claim against the recorded data. Assess the claim neutrally: confirmation, contradiction and uncertainty are all legitimate outcomes.
 
 You have read-only tools over the trading blotter. Use them.
 
@@ -94,22 +92,50 @@ When two records disagree, report the disagreement; do not pick one.
 
 ## How to work
 
-Two or three tool calls should settle most claims. Do not investigate beyond \
-the claim. If your first query returns nothing, try the tool that holds the \
-relevant records — orders for execution facts, risk_checks for checks, \
-positions for exits — before concluding anything.
+Use query_records(entity="risk_checks", subject=..., check_name="position_size")
+for passing OR failed checks. Retrieve the actual row; a matching position
+notional or absence of a rejection does not settle what a check recorded.
+Use record_id if supplied; multiple evaluations for a subject/day may disagree.
+Use query_records(entity="stop_orders", status="triggered", start_date=...,
+end_date=...) to count stop records by triggered_at. Position dates default to
+trade_initiation_date. Use date_basis="termination_date" for exits. Closed
+status describes current state, not the date of closing. For events use
+canonical labels (partial_fill, order_timeout); a validation error is not zero.
+Events, orders, positions and stops are distinct counting units.
 
 ## Output
 
-Briefly state what you checked and what you found. Then end with exactly two lines:
+Return ONE JSON object and no surrounding prose:
+{"verdict": "verified|contradicted|undetermined",
+ "evidence": "What the specific records establish, or what evidence is missing.",
+ "relation": "record|recorded_reason|aggregate|market_cause",
+ "references": [{"call": 1, "path": "/data/records/0/current_value",
+                 "value": 1234.56,
+                 "scope": {"population": "risk_checks", "date_basis": "checked_at",
+                           "window": ["2020-01-10", "2020-01-10"],
+                           "filters": {"subject": "EXAMPLE_PAIR", "check_name": "position_size"}}}]}
 
-VERDICT: verified | contradicted | undetermined
-EVIDENCE: <tool name> — <the specific value(s) or identifier(s) FROM THAT TOOL'S \
-RESULT that decided it: a figure, a count, a recorded reason, a tag, an order id>
-
-The EVIDENCE line must quote values that appear in a tool result you received. \
-Evidence quoting nothing from a result, or quoting only what you asked for, is \
-discarded and the verdict becomes undetermined.\
+The example describes the format; use ONLY your actual results. Each result
+contains evidence_call, its 1-based call number. Use that number, not a turn
+number. Paths are JSON pointers inside the result's data or provenance.
+Copy exact scalar values, preserving numeric signs and units; do not convert
+percentages or round cited values. Explain comparisons in evidence. For each
+reference copy ALL keys present in its provenance from this list into scope:
+population, date_basis, window, filters, group_by, status. If none exist use {}.
+For detect_anomalies references inside failed_risk_checks or halted_runs, copy
+these keys from provenance.scopes.<section> instead: their populations differ.
+Reference entity IDs and dates alongside measured values when deciding a
+record claim. A correct citation to the wrong population does not settle it.
+For a count, cite /data/count from query_records or
+/provenance/event_type_counts/<canonical_label> from detect_anomalies.
+These counts cover all matches, including zero; page lengths are not totals.
+For rankings cite the relevant returned breakdown values and grouping fields.
+For recorded_reason cite the actual reason/action field as well as its record
+identity. A stop's mechanism is not evidence excluding a market cause.
+For market_cause return undetermined: these tools contain no intraday market
+path or causal attribution method. Cite observations if useful and identify
+what is missing. References may be empty when evidence cannot settle a claim.
+A malformed reply or invalid reference is an assessment failure, not restraint.
 """
 
 
@@ -124,4 +150,5 @@ def verifier_system(blotter_context: str | None) -> str:
 def verifier_question(claim: str, original_question: str) -> str:
     return (f"Claim to check: {claim}\n\n"
             f"The claim was made in answer to: {original_question}\n\n"
-            f"Find evidence it is wrong. If you cannot, say whether it is verified or unverifiable.")
+            f"Assess this exact claim neutrally against the records. Return the JSON assessment. "
+            f"If the evidence cannot settle it, use undetermined and identify what is missing.")

@@ -33,6 +33,7 @@ def query_blotter(
     stage: str | None = None,
     traded: bool | int | None = None,
     limit: int = 50,
+    date_basis: str | None = None,
 ) -> ToolResult:
     """Look up raw records from the trade blotter.
 
@@ -54,6 +55,11 @@ def query_blotter(
     blotter. `ticker` matches either leg of a position. `status` accepts
     open/closed for positions and Filled/Partial/Failed for orders.
     """
+    if date_basis is not None and (entity != "positions" or date_basis not in
+            ("trade_initiation_date", "termination_date")):
+        return empty("Invalid arguments: date_basis is entry/exit date for positions only.", error=True)
+    basis = date_basis or {"positions": "trade_initiation_date", "orders": "placed_at",
+                          "candidates": "evaluated_at", "runs": "run_date"}.get(entity)
     start, end = resolve_window(conn, start_date, end_date)
     limit = clamp_limit(limit)
     params = {"start_date": start, "end_date": end, "limit": limit}
@@ -64,7 +70,7 @@ def query_blotter(
                         position_multiplier, total_notional, trade_initiation_date,
                         termination_date, holding_days, exit_reason,
                         final_alpha_return_pct, entry_spread_bps
-                 FROM positions WHERE """ + date_clause("trade_initiation_date")
+                 FROM positions WHERE """ + date_clause(basis)
         if ticker:
             where.append("(co1 = :ticker OR co2 = :ticker)")
             params["ticker"] = ticker
@@ -77,7 +83,7 @@ def query_blotter(
         if status:
             where.append("status = :status")
             params["status"] = status
-        order = "ORDER BY trade_initiation_date DESC"
+        order = f"ORDER BY {basis} DESC, tag"
 
     elif entity == "orders":
         sql = """SELECT o.order_id, o.ticker, o.side, o.order_type, o.total_shares,
@@ -145,17 +151,17 @@ def query_blotter(
     rows = rows_to_dicts(conn.execute(text(sql), params))
     if not rows:
         return empty(f"No {entity} matched those filters.",
-                     entity=entity, window=[start, end], filters=params)
+                     entity=entity, population=entity, date_basis=basis, window=[start, end], filters=params)
 
     return ToolResult(
         data=rows,
         provenance={
-            "entity": entity, "rows": len(rows), "window": [start, end],
+            "entity": entity, "population": entity, "date_basis": basis, "rows": len(rows), "window": [start, end],
             "filters": {k: v for k, v in params.items()
                         if k not in ("start_date", "end_date", "limit")},
             "truncated": len(rows) == limit,
         },
-        summary=f"{len(rows)} {entity} between {start} and {end}.",
+        summary=f"{len(rows)} {entity} by {basis} between {start} and {end}.",
     )
 
 
@@ -267,7 +273,7 @@ def explain_rejection(
         params["ticker"] = ticker
 
     sql = f"""
-        SELECT evaluated_at, pair, idx, tail, primary_result, primary_fail_reason,
+        SELECT eval_id, evaluated_at, pair, idx, tail, primary_result, primary_fail_reason,
                weighted_spread_bps, earnings_days_out, co1_trending, co2_trending,
                tstat, sum_dev_bucket, sum_dev_percentile, position_multiplier,
                is_tradeable_bucket, composite_score, composite_priority_score,

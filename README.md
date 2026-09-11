@@ -107,8 +107,16 @@ twenty-two cases are never used for tuning.
 **A claim critic.** Numeric fidelity cannot verify the *sentence* built around
 the figures. *"Rejected because its notional came within $18 of the cap"* had
 two real numbers, an invented causal link, and passed every check. The critic
-attacks each claim separately, and may only contradict one with a tool result
-behind it.
+assesses each claim separately. Settled verdicts require references to exact
+tool fields and their scope. Passing risk checks and triggered stops have a
+direct lookup; position queries distinguish entry and exit dates. Invalid
+assessments are reported separately from evidence-based uncertainty.
+
+The implementation and its limits are described in
+[`docs/CLAIM_CRITIC_REVIEW_2026-09-11.md`](docs/CLAIM_CRITIC_REVIEW_2026-09-11.md).
+Run `python run_critic_benchmark.py --preflight` to inspect imported paths and
+source/database fingerprints without model calls, then use `--atomic --save`
+to isolate verification. Keep the same database for the end-to-end comparison.
 
 What is *not* measured: whether the routing saves anything. The first three-arm
 comparison found the eval suite's run-to-run noise floor — roughly ±3 cases in

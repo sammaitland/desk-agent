@@ -16,6 +16,7 @@ when it doesn't.
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import pytest
 from sqlalchemy import text as sql
@@ -34,7 +35,7 @@ from src.generate_blotter import Generator
 def conn(blotter_url):
     engine = get_engine(blotter_url)
     create_schema(engine)
-    g = Generator(seed=42, days=120)
+    g = Generator(seed=42, days=120, as_of=date(2026, 9, 7))
     g.run()
     g.write(engine)
     with engine.connect() as c:
@@ -92,59 +93,48 @@ def test_passing_position_size_checks_are_recorded(conn):
 # GROUNDING: aggregates, arguments, failed calls
 # ===========================================================================
 
+def _assessment(t, path, value, relation="record", call=1):
+    from src.critic.evidence import SCOPE_KEYS
+    p = t.tool_calls[call - 1].provenance or {}
+    return {"verdict": "verified", "evidence": "checked the returned field", "relation": relation,
+            "references": [{"call": call, "path": path, "value": value,
+                            "scope": {k: p[k] for k in SCOPE_KEYS if k in p}}]}
+
+
 def test_aggregate_evidence_grounds_on_a_figure(conn):
-    """Review: '11 partial fills' and 'VIS at 34.57%' were downgraded for
-    naming no record. A figure present in a result now grounds."""
-    t = _trace(conn, [tool_turn("detect_anomalies", {"start_date": "2026-08-17", "end_date": "2026-08-26"}),
-                      final_turn("x")])
-    counts = t.tool_calls[0].provenance["event_type_counts"]
-    n = counts["partial_fill"]
-    ok, why = evidence_is_grounded(f"detect_anomalies — event_type_counts shows {n} partial_fill events", t)
-    assert ok, why
+    t = _trace(conn, [tool_turn("detect_anomalies", {"event_type": "partial_fill"}), final_turn("x")])
+    n = t.tool_calls[0].provenance["event_type_counts"]["partial_fill"]
+    assert evidence_is_grounded(_assessment(t, "/provenance/event_type_counts/partial_fill", n, "aggregate"), t)[0]
 
 
 def test_ranking_evidence_grounds_on_breakdown_figures(conn):
     t = _trace(conn, [tool_turn("alpha_attribution", {"group_by": "idx"}), final_turn("x")])
-    row = t.tool_calls[0].raw_result["breakdown"][0]
-    ok, why = evidence_is_grounded(
-        f"alpha_attribution — {row['grouping']} total_alpha_pct {row['total_alpha_pct']}", t)
-    assert ok, why
+    n = t.tool_calls[0].raw_result["breakdown"][0]["total_alpha_pct"]
+    assert evidence_is_grounded(_assessment(t, "/data/breakdown/0/total_alpha_pct", n, "aggregate"), t)[0]
 
 
 def test_arguments_never_ground(conn):
-    """Review: a nonexistent pair present only in the query arguments passed."""
     t = _trace(conn, [tool_turn("explain_rejection", {"pair": "ZZZZ_QQQQ"}), final_turn("x")])
-    ok, why = evidence_is_grounded("explain_rejection — ZZZZ_QQQQ rejection_reason differs", t)
-    assert not ok
+    assert not evidence_is_grounded(_assessment(t, "/provenance/filters/pair", "ZZZZ_QQQQ"), t)[0]
 
 
 def test_failed_or_empty_call_does_not_ground_even_if_another_succeeded(conn):
-    """Review: a reference found only in a failed call grounded because an
-    unrelated call had succeeded."""
     tag = conn.execute(sql("SELECT tag FROM positions LIMIT 1")).scalar()
-    t = _trace(conn, [tool_turn("explain_position", {"tag": tag}),           # succeeds
-                      tool_turn("explain_position", {"tag": "VGT_NO_NO_L_20260101_999"}),  # empty
-                      final_turn("x")])
-    ok, why = evidence_is_grounded("explain_position — VGT_NO_NO_L_20260101_999 alpha 12.34", t)
-    assert not ok and "absent" in why
+    t = _trace(conn, [tool_turn("explain_position", {"tag": tag}),
+                      tool_turn("explain_position", {"tag": "MISSING"}), final_turn("x")])
+    assert not evidence_is_grounded(_assessment(t, "/data/position/tag", "MISSING", call=2), t)[0]
 
 
 def test_figure_must_be_a_value_in_a_result_not_a_digit_in_text(conn):
-    """'5' inside 'chk_5a...' or a date must not ground a claim of five."""
     t = _trace(conn, [tool_turn("query_blotter", {"entity": "runs", "limit": 1}), final_turn("x")])
-    # 999999 appears nowhere as a value
-    ok, why = evidence_is_grounded("query_blotter — there were 999999", t)
-    assert not ok and "absent" in why
-    # a count that IS a value in the result grounds
-    rows = t.tool_calls[0].provenance["rows"]
-    ok, why = evidence_is_grounded(f"query_blotter — returned {rows}", t)
-    assert ok, why
+    assert not evidence_is_grounded(_assessment(t, "/data/0/run_date", 24), t)[0]
 
 
 def test_proposed_verdict_is_preserved_when_downgraded(conn, tmp_path):
     """Review: preserve raw proposed verdicts alongside final ones."""
     claim = Claim("x", "x", "causal", True, True)
-    client = ScriptedClient([final_turn("VERDICT: contradicted\nEVIDENCE: intuition")])
+    client = ScriptedClient([final_turn(json.dumps({"verdict": "contradicted", "evidence": "intuition",
+                                                    "relation": "record", "references": []}))])
     v = verify_claim(claim, "q", conn, client=client, trace_dir=tmp_path)
     assert v.proposed == "contradicted" and v.verdict == "undetermined"
 
@@ -409,13 +399,18 @@ def test_verifier_prompt_separates_claim_from_question():
 # ===========================================================================
 
 def test_grounded_contradiction_of_reversed_reason_stands(conn, tmp_path):
-    pair, reason = conn.execute(sql(
-        "SELECT pair, rejection_reason FROM pair_evaluations WHERE evaluation_result='Rejected' AND rejection_reason IS NOT NULL LIMIT 1")).one()
+    from src.tools import dispatch
+    pair = conn.execute(sql("SELECT pair FROM pair_evaluations WHERE rejection_reason IS NOT NULL LIMIT 1")).scalar()
+    result = dispatch("explain_rejection", {"pair": pair}, conn)
+    from src.agent.trace import Trace
+    trace = Trace("q")
+    trace.record_tool("explain_rejection", {"pair": pair}, result, 0, 1)
+    index = next(i for i, r in enumerate(result.data) if r["rejection_reason"] or r["primary_fail_reason"])
+    field = "rejection_reason" if result.data[index]["rejection_reason"] else "primary_fail_reason"
+    assessment = _assessment(trace, f"/data/{index}/{field}", result.data[index][field], "recorded_reason")
+    assessment["verdict"] = "contradicted"
     claim = Claim("x", f"{pair} was rejected because of position size", "causal", True, True)
-    client = ScriptedClient([
-        tool_turn("explain_rejection", {"pair": pair}),
-        final_turn(f"VERDICT: contradicted\nEVIDENCE: explain_rejection — {pair} rejection_reason is {reason}"),
-    ])
+    client = ScriptedClient([tool_turn("explain_rejection", {"pair": pair}), final_turn(json.dumps(assessment))])
     v = verify_claim(claim, "q", conn, client=client, trace_dir=tmp_path)
     assert v.verdict == "contradicted" and v.downgraded is None
 
